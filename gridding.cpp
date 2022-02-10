@@ -170,32 +170,33 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
   return grid_size / MAX_BL_M * (SPEED_OF_LIGHT / end_frequency);
 }
 
-int main(int argc, char *argv[]) {
-  string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
 
-  metadata* meta = new metadata();
-  getMetadata(ms_path, meta);
+void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3, 
+             const string& ms_path, metadata* meta,
+             idg::Array2D<idg::UVW<float>> &uvw,
+             idg::Array1D<float> &frequencies,
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) {
 
-  std::clog << ">>> Initialize IDG proxy." << std::endl;
-  idg::proxy::cuda::Generic proxy;
-
-  std::clog << ">>> Allocating metadata arrays" << std::endl;
-  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta->nr_channels);
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
-      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
-          meta->nr_baselines);
-  idg::Array2D<idg::UVW<float>> uvw =
-      proxy.allocate_array2d<idg::UVW<float>>(meta->nr_baselines, meta->nr_timesteps);
-  std::clog << ">>> Allocating vis" << std::endl;
-  auto shape = std::vector<size_t>(meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
-  recycle_memory<complex<float>> r3(shape, some_max_size);
-
-  buffer_ptr vis = r3.operate();
-  Array4D<complex<float>> visibilities(vis.get(), meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
+  auto vis = r3->fill();
+  idg::Array4D<complex<float>> visibilities(vis.get(), meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
 
   std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta->nr_channels, meta->nr_baselines, meta->nr_timesteps, uvw, frequencies,
-          baselines, visibilities);
+  getData(ms_path, meta, uvw, frequencies, baselines, visibilities);
+
+  r3->queue(vis);
+}
+
+void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
+             metadata* meta,
+             idg::proxy::cuda::Generic& proxy,
+             idg::Array2D<idg::UVW<float>> &uvw,
+             idg::Array1D<float> &frequencies,
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) { // proxy
+  
+  buffer_ptr vis = r3->operate();
+  idg::Array4D<complex<float>> visibilities(vis.get(), meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
+
+
   float end_frequency = frequencies(frequencies.size() - 1);
   std::clog << "end frequency = " << end_frequency << std::endl;
 
@@ -263,6 +264,34 @@ int main(int argc, char *argv[]) {
       "image.npy", false, 3, imshape,
       std::vector<double>(image_iquv.data(),
                           image_iquv.data() + image_iquv.size()));
+
+}
+
+
+int main(int argc, char *argv[]) {
+  string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
+
+  metadata* meta = new metadata();
+  getMetadata(ms_path, meta);
+
+  std::clog << ">>> Initialize IDG proxy." << std::endl;
+  idg::proxy::cuda::Generic proxy;
+
+  std::clog << ">>> Allocating metadata arrays" << std::endl;
+  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta->nr_channels);
+  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
+      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
+          meta->nr_baselines);
+  idg::Array2D<idg::UVW<float>> uvw =
+      proxy.allocate_array2d<idg::UVW<float>>(meta->nr_baselines, meta->nr_timesteps);
+  std::clog << ">>> Allocating vis" << std::endl;
+
+  std::vector<size_t> shape {meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations};
+  std::shared_ptr<recycle_memory<complex<float>>> r3 = std::make_shared<recycle_memory<complex<float>>>(shape, 1);
+
+  ms_fill_thread(r3, ms_path, meta, uvw, frequencies, baselines);
+
+  grid_operate_thread(r3, meta, proxy, uvw, frequencies, baselines);
 
   free(meta);
 }
