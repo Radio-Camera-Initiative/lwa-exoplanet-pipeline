@@ -31,36 +31,43 @@ using casacore::IPosition;
 using std::complex;
 using std::string;
 
-void getMetadata(const string &ms_path, float &integration_time,
-                 unsigned int &nr_rows, unsigned int &nr_stations,
-                 unsigned int &nr_baselines, unsigned int &nr_timesteps,
-                 unsigned int &nr_channels, unsigned int &nr_correlations) {
+struct metadata {
+  unsigned int nr_correlations;
+  unsigned int nr_rows;
+  unsigned int nr_stations;
+  unsigned int nr_baselines;
+  unsigned int nr_timesteps;
+  unsigned int nr_channels;
+  float integration_time;
+};
+
+void getMetadata(const string &ms_path, metadata* meta) {
   casacore::MeasurementSet ms(ms_path);
   casacore::ROArrayColumn<casacore::Complex> data_column(
       ms, casacore::MS::columnName(casacore::MSMainEnums::DATA));
-  nr_correlations = 4;
-  nr_rows = data_column.nrow();
-  nr_stations = ms.antenna().nrow();
-  nr_baselines = (nr_stations * (nr_stations - 1)) / 2;
+  meta->nr_correlations = 4;
+  meta->nr_rows = data_column.nrow();
+  meta->nr_stations = ms.antenna().nrow();
+  meta->nr_baselines = (meta->nr_stations * (meta->nr_stations - 1)) / 2;
   // assume there's no autocorrelation in the data
-  assert(nr_rows % nr_baselines == 0);
-  nr_timesteps = nr_rows / nr_baselines;
+  assert(meta->nr_rows % meta->nr_baselines == 0);
+  meta->nr_timesteps = meta->nr_rows / meta->nr_baselines;
 
   casacore::ROScalarColumn<double> exposure_col(
       ms, casacore::MS::columnName(casacore::MSMainEnums::EXPOSURE));
-  integration_time = static_cast<float>(exposure_col.get(0));
+  meta->integration_time = static_cast<float>(exposure_col.get(0));
 
   casacore::ROScalarColumn<int> num_chan_col(
       ms.spectralWindow(), casacore::MSSpectralWindow::columnName(
                                casacore::MSSpectralWindowEnums::NUM_CHAN));
-  nr_channels = static_cast<unsigned int>(num_chan_col.get(0));
-  std::clog << "integration_time = " << integration_time << std::endl;
-  std::clog << "nr_rows = " << nr_rows << std::endl;
-  std::clog << "nr_stations = " << nr_stations << std::endl;
-  std::clog << "nr_baselines = " << nr_baselines << std::endl;
-  std::clog << "nr_timesteps = " << nr_timesteps << std::endl;
-  std::clog << "nr_channels = " << nr_channels << std::endl;
-  std::clog << "nr_correlations = " << nr_correlations << std::endl;
+  meta->nr_channels = static_cast<unsigned int>(num_chan_col.get(0));
+  std::clog << "integration_time = " << meta->integration_time << std::endl;
+  std::clog << "nr_rows = " << meta->nr_rows << std::endl;
+  std::clog << "nr_stations = " << meta->nr_stations << std::endl;
+  std::clog << "nr_baselines = " << meta->nr_baselines << std::endl;
+  std::clog << "nr_timesteps = " << meta->nr_timesteps << std::endl;
+  std::clog << "nr_channels = " << meta->nr_channels << std::endl;
+  std::clog << "nr_correlations = " << meta->nr_correlations << std::endl;
 }
 
 void reorderData(const unsigned int nr_timesteps,
@@ -91,8 +98,7 @@ void reorderData(const unsigned int nr_timesteps,
   }
 }
 
-void getData(const string &ms_path, const unsigned int nr_channels,
-             const unsigned int nr_baselines, const unsigned int nr_timesteps,
+void getData(const string &ms_path, metadata* meta,
              idg::Array2D<idg::UVW<float>> &uvw,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines,
@@ -114,16 +120,16 @@ void getData(const string &ms_path, const unsigned int nr_channels,
       << "Reading baseline pairs and frequencies data from the measurement set."
       << std::endl;
   casacore::Array<double> src_freqs = freqs(0);
-  assert(src_freqs.size() == nr_channels);
-  for (unsigned int i = 0; i < nr_channels; ++i)
+  assert(src_freqs.size() == meta->nr_channels);
+  for (unsigned int i = 0; i < meta->nr_channels; ++i)
     frequencies(i) = float(src_freqs(IPosition(1, i)));
   std::clog << "done with reading frequencies." << std::endl;
 
-  casacore::Slicer first_int_rows(IPosition(1, 0), IPosition(1, nr_baselines));
+  casacore::Slicer first_int_rows(IPosition(1, 0), IPosition(1, meta->nr_baselines));
   casacore::Vector<int> ant1_vec = ant1.getColumnRange(first_int_rows);
   casacore::Vector<int> ant2_vec = ant2.getColumnRange(first_int_rows);
 #pragma omp parallel for default(none) shared(baselines, ant1_vec, ant2_vec)
-  for (unsigned int i = 0; i < nr_baselines; ++i) {
+  for (unsigned int i = 0; i < meta->nr_baselines; ++i) {
     std::pair<unsigned int, unsigned int> curr_pair = {ant1_vec(i),
                                                        ant2_vec(i)};
     baselines(i) = curr_pair;
@@ -150,8 +156,8 @@ void getData(const string &ms_path, const unsigned int nr_channels,
   std::clog << "Done reading measurement set in " << duration.count() << "s"
             << std::endl;
   start = std::chrono::high_resolution_clock::now();
-  reorderData(nr_timesteps, nr_baselines, nr_channels, uvw_rows, data_rows, uvw,
-              visibilities);
+  reorderData(meta->nr_timesteps, meta->nr_baselines, meta->nr_channels, 
+              uvw_rows, data_rows, uvw, visibilities);
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Reordered visibilities in " << duration.count() << "s"
@@ -167,36 +173,28 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 int main(int argc, char *argv[]) {
   string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
 
-  // TODO: a struct?
-  unsigned int nr_correlations;
-  unsigned int nr_rows;
-  unsigned int nr_stations;
-  unsigned int nr_baselines;
-  float integration_time;
-  unsigned int nr_timesteps;
-  unsigned int nr_channels;
-  getMetadata(ms_path, integration_time, nr_rows, nr_stations, nr_baselines,
-              nr_timesteps, nr_channels, nr_correlations);
+  metadata* meta = new metadata();
+  getMetadata(ms_path, meta);
 
   std::clog << ">>> Initialize IDG proxy." << std::endl;
   idg::proxy::cuda::Generic proxy;
 
   std::clog << ">>> Allocating metadata arrays" << std::endl;
-  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(nr_channels);
+  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta->nr_channels);
   idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
       proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
-          nr_baselines);
+          meta->nr_baselines);
   idg::Array2D<idg::UVW<float>> uvw =
-      proxy.allocate_array2d<idg::UVW<float>>(nr_baselines, nr_timesteps);
+      proxy.allocate_array2d<idg::UVW<float>>(meta->nr_baselines, meta->nr_timesteps);
   std::clog << ">>> Allocating vis" << std::endl;
-  auto shape = std::vector<size_t>(nr_baselines, nr_timesteps, nr_channels, nr_correlations);
+  auto shape = std::vector<size_t>(meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
   recycle_memory<complex<float>> r3(shape, some_max_size);
 
   buffer_ptr vis = r3.operate();
-  Array4D<complex<float>> visibilities(vis.get(), nr_baselines, nr_timesteps, nr_channels, nr_correlations);
+  Array4D<complex<float>> visibilities(vis.get(), meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations);
 
   std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, nr_channels, nr_baselines, nr_timesteps, uvw, frequencies,
+  getData(ms_path, meta->nr_channels, meta->nr_baselines, meta->nr_timesteps, uvw, frequencies,
           baselines, visibilities);
   float end_frequency = frequencies(frequencies.size() - 1);
   std::clog << "end frequency = " << end_frequency << std::endl;
@@ -213,16 +211,16 @@ int main(int argc, char *argv[]) {
   const unsigned int subgrid_size = 32;
   const unsigned int kernel_size = 13;
   idg::Array4D<idg::Matrix2x2<complex<float>>> aterms = idg::get_example_aterms(
-      proxy, nr_timeslots, nr_stations, subgrid_size, subgrid_size);
+      proxy, nr_timeslots, meta->nr_stations, subgrid_size, subgrid_size);
   idg::Array1D<unsigned int> aterms_offsets =
-      idg::get_example_aterms_offsets(proxy, nr_timeslots, nr_timesteps);
+      idg::get_example_aterms_offsets(proxy, nr_timeslots, meta->nr_timesteps);
 
   idg::Array2D<float> spread =
       idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
   idg::Array1D<float> shift = idg::get_zero_shift();
 
   std::shared_ptr<idg::Grid> grid =
-      proxy.allocate_grid(1, nr_correlations, grid_size, grid_size);
+      proxy.allocate_grid(1, meta->nr_correlations, grid_size, grid_size);
   proxy.set_grid(grid);
   // no w-tiling, i.e. not using w_step
 
@@ -265,4 +263,6 @@ int main(int argc, char *argv[]) {
       "image.npy", false, 3, imshape,
       std::vector<double>(image_iquv.data(),
                           image_iquv.data() + image_iquv.size()));
+
+  free(meta);
 }
