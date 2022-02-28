@@ -14,6 +14,7 @@
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include <thread>
 
 #include "CUDA/Generic/Generic.h"
 #include "common/KernelTypes.h"
@@ -289,9 +290,11 @@ int main(int argc, char *argv[]) {
   std::vector<size_t> shape {meta->nr_baselines, meta->nr_timesteps, meta->nr_channels, meta->nr_correlations};
   std::shared_ptr<recycle_memory<complex<float>>> r3 = std::make_shared<recycle_memory<complex<float>>>(shape, 1);
 
-  ms_fill_thread(r3, ms_path, meta, uvw, frequencies, baselines);
+  std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
-  grid_operate_thread(r3, meta, proxy, uvw, frequencies, baselines);
+  std::thread operating (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
+  measurement.join();
+  operating.join();
   free(meta);
 }
