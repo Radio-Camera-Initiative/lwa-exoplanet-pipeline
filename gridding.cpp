@@ -181,12 +181,13 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) {
 
+  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
+  std::clog << ">>> Reading data" << std::endl;
+  getData(ms_path, meta, uvw, frequencies, baselines, main_vis);
+  
   auto vis = r3->fill();
   idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
-
-  std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta, uvw, frequencies, baselines, visibilities);
-
+  memcpy(visibilities.data(), main_vis.data(), main_vis.bytes());
   r3->queue(vis);
 }
 
