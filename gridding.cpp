@@ -298,9 +298,11 @@ int main(int argc, char *argv[]) {
 
   metadata meta = getMetadata(ms_path);
 
-  std::clog << ">>> Initialize IDG proxy." << std::endl;
+  std::clog << ">>> Initialize 2 IDG proxy." << std::endl;
   idg::proxy::cuda::Generic proxy;
+  idg::proxy::cuda::Generic proxy2;
 
+  // change each of these to recyclers?
   std::clog << ">>> Allocating metadata arrays" << std::endl;
   idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta.nr_channels);
   idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
@@ -316,7 +318,7 @@ int main(int argc, char *argv[]) {
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
   std::thread operating (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
-  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(proxy2), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
   measurement.join();
   operating.join();
