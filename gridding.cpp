@@ -316,7 +316,9 @@ int main(int argc, char *argv[]) {
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
   std::thread operating (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
   measurement.join();
   operating.join();
+  operating_copy.join();
 }
