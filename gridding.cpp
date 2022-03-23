@@ -304,16 +304,29 @@ int main(int argc, char *argv[]) {
 
   // change each of these to recyclers?
   std::clog << ">>> Allocating metadata arrays" << std::endl;
-  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta.nr_channels);
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
-      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
+  std::vector<size_t> shape_freq {meta.nr_channels};
+  std::shared_ptr<recycle_memory<float>> r_freq = 
+          std::make_shared<recycle_memory<float>>(shape_freq, 1);
+  auto freq = r_freq->fill();
+  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
+
+  std::vector<size_t> shape_base {meta.nr_baselines};
+  std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base = 
+          std::make_shared<recycle_memory<std::pair<unsigned int, unsigned int>>>(shape_base, 1);
+  auto base = r_base->fill();
+  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
           meta.nr_baselines);
-  idg::Array2D<idg::UVW<float>> uvw =
-      proxy.allocate_array2d<idg::UVW<float>>(meta.nr_baselines, meta.nr_timesteps);
+  
+  std::vector<size_t> shape_uvw {meta.nr_baselines, meta.nr_timesteps};
+  std::shared_ptr<recycle_memory<idg::UVW<float>>> r_uvw = 
+          std::make_shared<recycle_memory<idg::UVW<float>>>(shape_uvw, 1);
+  auto uvw_b = r_uvw->fill();
+  idg::Array2D<idg::UVW<float>> uvw(uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
   std::clog << ">>> Allocating vis" << std::endl;
 
   std::vector<size_t> shape {meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations};
-  std::shared_ptr<recycle_memory<complex<float>>> r3 = std::make_shared<recycle_memory<complex<float>>>(shape, 5);
+  std::shared_ptr<recycle_memory<complex<float>>> r3 = 
+          std::make_shared<recycle_memory<complex<float>>>(shape, 5);
 
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
