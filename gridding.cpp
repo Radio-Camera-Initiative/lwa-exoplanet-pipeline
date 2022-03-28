@@ -200,54 +200,55 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
 
 void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              metadata meta,
-             idg::proxy::cuda::Generic& proxy,
              idg::Array2D<idg::UVW<float>> &uvw,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) { // proxy
   
+  std::clog << ">>> Initialize IDG proxy." << std::endl;
+  idg::proxy::cuda::Generic proxy;
+
+  float end_frequency = frequencies(frequencies.size() - 1);
+  std::clog << "end frequency = " << end_frequency << std::endl;
+
+  unsigned int grid_size = 8192;
+  float image_size = computeImageSize(grid_size, end_frequency);
+  float cell_size = image_size / grid_size;
+  std::clog << "grid_size = " << grid_size << std::endl;
+  std::clog << "image_size = " << image_size << " (radians?)" << std::endl;
+  std::clog << "pixel_size (idg's cell_size) = " << cell_size << " (radians?)" << std::endl;
+
+  // A-terms
+  const unsigned int nr_timeslots = 1;  // timeslot for a-term
+  const unsigned int subgrid_size = 32;
+  const unsigned int kernel_size = 13;
+  idg::Array4D<idg::Matrix2x2<complex<float>>> aterms = idg::get_example_aterms(
+      proxy, nr_timeslots, meta.nr_stations, subgrid_size, subgrid_size);
+  idg::Array1D<unsigned int> aterms_offsets =
+      idg::get_example_aterms_offsets(proxy, nr_timeslots, meta.nr_timesteps);
+
+  idg::Array2D<float> spread =
+      idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
+  idg::Array1D<float> shift = idg::get_zero_shift();
+
+  std::shared_ptr<idg::Grid> grid =
+      proxy.allocate_grid(1, meta.nr_correlations, grid_size, grid_size);
+  proxy.set_grid(grid);
+  // no w-tiling, i.e. not using w_step
+
+  proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
+
+  // Create plan
+  std::clog << ">>> Creating plan" << std::endl;
+  idg::Plan::Options options;
+  options.plan_strict = true;
+  const std::unique_ptr<idg::Plan> plan = proxy.make_plan(
+      kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
+  std::clog << std::endl;
+
   while (global_reading) {
     buffer_ptr vis = r3->operate();
-    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
-
-
-    float end_frequency = frequencies(frequencies.size() - 1);
-    std::clog << "end frequency = " << end_frequency << std::endl;
-
-    unsigned int grid_size = 8192;
-    float image_size = computeImageSize(grid_size, end_frequency);
-    float cell_size = image_size / grid_size;
-    std::clog << "grid_size = " << grid_size << std::endl;
-    std::clog << "image_size = " << image_size << " (radians?)" << std::endl;
-    std::clog << "pixel_size (idg's cell_size) = " << cell_size << " (radians?)" << std::endl;
-
-    // A-terms
-    const unsigned int nr_timeslots = 1;  // timeslot for a-term
-    const unsigned int subgrid_size = 32;
-    const unsigned int kernel_size = 13;
-    idg::Array4D<idg::Matrix2x2<complex<float>>> aterms = idg::get_example_aterms(
-        proxy, nr_timeslots, meta.nr_stations, subgrid_size, subgrid_size);
-    idg::Array1D<unsigned int> aterms_offsets =
-        idg::get_example_aterms_offsets(proxy, nr_timeslots, meta.nr_timesteps);
-
-    idg::Array2D<float> spread =
-        idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
-    idg::Array1D<float> shift = idg::get_zero_shift();
-
-    std::shared_ptr<idg::Grid> grid =
-        proxy.allocate_grid(1, meta.nr_correlations, grid_size, grid_size);
-    proxy.set_grid(grid);
-    // no w-tiling, i.e. not using w_step
-
-    proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
-
-    // Create plan
-    std::clog << ">>> Creating plan" << std::endl;
-    idg::Plan::Options options;
-    options.plan_strict = true;
-    const std::unique_ptr<idg::Plan> plan = proxy.make_plan(
-        kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
-    std::clog << std::endl;
-
+    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, 
+                    meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
 
     std::chrono::_V2::system_clock::time_point start =
       std::chrono::high_resolution_clock::now();
@@ -298,10 +299,6 @@ int main(int argc, char *argv[]) {
 
   metadata meta = getMetadata(ms_path);
 
-  std::clog << ">>> Initialize 2 IDG proxy." << std::endl;
-  idg::proxy::cuda::Generic proxy;
-  idg::proxy::cuda::Generic proxy2;
-
   // change each of these to recyclers?
   std::clog << ">>> Allocating metadata arrays" << std::endl;
   std::vector<size_t> shape_freq {meta.nr_channels};
@@ -330,8 +327,8 @@ int main(int argc, char *argv[]) {
 
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
-  std::thread operating (grid_operate_thread, r3, meta, std::ref(proxy), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
-  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(proxy2), std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread operating (grid_operate_thread, r3, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
 
   measurement.join();
   operating.join();
