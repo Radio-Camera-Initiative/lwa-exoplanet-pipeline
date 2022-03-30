@@ -179,13 +179,28 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 
 void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3, 
              const string& ms_path, metadata meta,
-             idg::Array2D<idg::UVW<float>> &uvw,
-             idg::Array1D<float> &frequencies,
-             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) {
+             std::shared_ptr<recycle_memory<float>> r_uvw,
+             std::shared_ptr<recycle_memory<float>> r_freq,
+             std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base) {
 
   idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
+
+  auto freq = r_freq->fill();
+  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
+
+  auto base = r_base->fill();
+  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
+          meta.nr_baselines);
+
+  auto uvw_b = r_uvw->fill();
+  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
+
   std::clog << ">>> Reading data" << std::endl;
   getData(ms_path, meta, uvw, frequencies, baselines, main_vis);
+
+  r_freq->queue(freq);
+  r_base->queue(base);
+  r_uvw->queue(uvw_b);
   
   while(global_reading) {
     std::clog << ">>> Copying main data" << std::endl;
@@ -200,12 +215,15 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
 
 void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              metadata meta,
-             idg::Array2D<idg::UVW<float>> &uvw,
-             idg::Array1D<float> &frequencies,
-             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) { // proxy
+             std::shared_ptr<recycle_memory<float>> r_uvw,
+             std::shared_ptr<recycle_memory<float>> r_freq,
+             std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base) { // proxy
   
   std::clog << ">>> Initialize IDG proxy." << std::endl;
   idg::proxy::cuda::Generic proxy;
+
+  auto freq = r_freq->operate();
+  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
 
   float end_frequency = frequencies(frequencies.size() - 1);
   std::clog << "end frequency = " << end_frequency << std::endl;
@@ -236,6 +254,13 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
   // no w-tiling, i.e. not using w_step
 
   proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
+
+  auto base = r_base->operate();
+  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
+          meta.nr_baselines);
+
+  auto uvw_b = r_uvw->operate();
+  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
 
   // Create plan
   std::clog << ">>> Creating plan" << std::endl;
@@ -299,36 +324,35 @@ int main(int argc, char *argv[]) {
 
   metadata meta = getMetadata(ms_path);
 
+  std::cout
+        << "offset of u = " << offsetof(idg::UVW<float>, u) << '\n'
+        << "offset of v = " << offsetof(idg::UVW<float>, v) << '\n'
+        << "offset of w = " << offsetof(idg::UVW<float>, w) << '\n';
+
   // change each of these to recyclers?
   std::clog << ">>> Allocating metadata arrays" << std::endl;
   std::vector<size_t> shape_freq {meta.nr_channels};
   std::shared_ptr<recycle_memory<float>> r_freq = 
           std::make_shared<recycle_memory<float>>(shape_freq, 1);
-  auto freq = r_freq->fill();
-  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
 
   std::vector<size_t> shape_base {meta.nr_baselines};
   std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base = 
           std::make_shared<recycle_memory<std::pair<unsigned int, unsigned int>>>(shape_base, 1);
-  auto base = r_base->fill();
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
-          meta.nr_baselines);
   
-  std::vector<size_t> shape_uvw {meta.nr_baselines, meta.nr_timesteps};
-  std::shared_ptr<recycle_memory<idg::UVW<float>>> r_uvw = 
-          std::make_shared<recycle_memory<idg::UVW<float>>>(shape_uvw, 1);
-  auto uvw_b = r_uvw->fill();
-  idg::Array2D<idg::UVW<float>> uvw(uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
+  std::vector<size_t> shape_uvw {meta.nr_baselines, meta.nr_timesteps, 3};
+  std::shared_ptr<recycle_memory<float>> r_uvw = 
+          std::make_shared<recycle_memory<float>>(shape_uvw, 1);
+
   std::clog << ">>> Allocating vis" << std::endl;
 
   std::vector<size_t> shape {meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations};
   std::shared_ptr<recycle_memory<complex<float>>> r3 = 
           std::make_shared<recycle_memory<complex<float>>>(shape, 5);
 
-  std::thread measurement (ms_fill_thread, r3, ms_path, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, r_freq, r_base);
 
-  std::thread operating (grid_operate_thread, r3, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
-  std::thread operating_copy  (grid_operate_thread, r3, meta, std::ref(uvw), std::ref(frequencies), std::ref(baselines));
+  std::thread operating (grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
+  std::thread operating_copy  (grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
 
   measurement.join();
   operating.join();
