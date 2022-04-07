@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <vector>
 #include <thread>
+#include <cmath>
 
 #include "CUDA/Generic/Generic.h"
 #include "common/KernelTypes.h"
@@ -262,6 +263,14 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
   auto uvw_b = r_uvw->operate();
   idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
 
+  // Create reference array (vector)
+  std::vector<long unsigned> im_shape {4, grid_size, grid_size};
+  auto ref_iquv = proxy.allocate_array3d<double>(4, grid_size, grid_size);
+  std::vector<double> temp_data = std::vector<double>(ref_iquv.data(),
+                            ref_iquv.data() + ref_iquv.size());
+  bool t = false;
+  npy::LoadArrayFromNumpy("reference.npy", im_shape, t, temp_data);
+
   // Create plan
   std::clog << ">>> Creating plan" << std::endl;
   idg::Plan::Options options;
@@ -309,11 +318,27 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
       }
     }
 
-    const long unsigned imshape[] = {4, grid_size, grid_size};
-    npy::SaveArrayAsNumpy(
-        "image.npy", false, 3, imshape,
-        std::vector<double>(image_iquv.data(),
-                            image_iquv.data() + image_iquv.size()));
+    
+    int total_incorrect = 0;
+    for (size_t z = 0; z < ref_iquv.get_z_dim(); ++z) {
+      for (size_t y = 0; y < ref_iquv.get_y_dim(); ++y) {
+        for (size_t x = 0; x < ref_iquv.get_x_dim(); ++x) {
+          if (std::fabs(ref_iquv(z, y, x) - image_iquv(z, y, x)) > 0.01) {
+            ++total_incorrect;
+            // std::cout << "Incorrect value. Expected " << ref_iquv(z, y, x)
+            //           << " but got " << image_iquv(z, y, x) << std::endl;
+          }
+        }
+      }
+    }
+    std::cout << "Testing image result. " << total_incorrect << " incorrect values." << std::endl;
+
+
+    // const long unsigned imshape[] = {4, grid_size, grid_size};
+    // npy::SaveArrayAsNumpy(
+    //     "image.npy", false, 3, imshape,
+    //     std::vector<double>(image_iquv.data(),
+    //                         image_iquv.data() + image_iquv.size()));
 
   }
 }
