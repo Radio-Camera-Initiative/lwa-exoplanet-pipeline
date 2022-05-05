@@ -26,6 +26,10 @@
 
 #include "r3.hpp"
 
+#define TEST false
+#define CHANPAR 1 // number of channels to put into one grid
+#define CHANTHR 8 // number of IDG instances to make
+
 const float SPEED_OF_LIGHT = 299792458.0;
 const float MAX_BL_M = 15392.2;
 
@@ -95,11 +99,12 @@ void reorderData(const unsigned int nr_timesteps,
                                  float(uvw_rows(IPosition(2, 2, row_i)))};
       uvw(bl, t) = idg_uvw;
 
-      for (unsigned int chan = 0; chan < nr_channels; ++chan) {
-        visibilities(bl, t, chan, 0) = data_rows(IPosition(3, 0, chan, row_i));
-        visibilities(bl, t, chan, 1) = data_rows(IPosition(3, 1, chan, row_i));
-        visibilities(bl, t, chan, 2) = data_rows(IPosition(3, 2, chan, row_i));
-        visibilities(bl, t, chan, 3) = data_rows(IPosition(3, 3, chan, row_i));
+      int copy_chan = nr_channels;
+      for (unsigned int chan = 0; chan < CHANPAR; ++chan) {
+        visibilities(bl, t, chan, 0) = data_rows(IPosition(3, 0, copy_chan, row_i));
+        visibilities(bl, t, chan, 1) = data_rows(IPosition(3, 1, copy_chan, row_i));
+        visibilities(bl, t, chan, 2) = data_rows(IPosition(3, 2, copy_chan, row_i));
+        visibilities(bl, t, chan, 3) = data_rows(IPosition(3, 3, copy_chan, row_i));
       }
     }
   }
@@ -184,7 +189,7 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              std::shared_ptr<recycle_memory<float>> r_freq,
              std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base) {
 
-  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
+  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, CHANPAR, meta.nr_correlations);
 
   auto freq = r_freq->fill();
   idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
@@ -370,16 +375,19 @@ int main(int argc, char *argv[]) {
 
   std::clog << ">>> Allocating vis" << std::endl;
 
-  std::vector<size_t> shape {meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations};
+  std::vector<size_t> shape {meta.nr_baselines, meta.nr_timesteps, CHANPAR, meta.nr_correlations};
   std::shared_ptr<recycle_memory<complex<float>>> r3 = 
-          std::make_shared<recycle_memory<complex<float>>>(shape, 5);
+          std::make_shared<recycle_memory<complex<float>>>(shape, CHANTHR);
 
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, r_freq, r_base);
 
-  std::thread operating (grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
-  std::thread operating_copy  (grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
+  std::vector<std::thread> threads(CHANTHR);
+  for (auto& i : threads) {
+      i = std::thread(grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
+  }
 
   measurement.join();
-  operating.join();
-  operating_copy.join();
+  for (auto& i : threads) {
+      i.join();
+  }
 }
