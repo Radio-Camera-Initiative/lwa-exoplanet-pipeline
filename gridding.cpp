@@ -333,29 +333,26 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
       }
     }
 
-    
-    int total_incorrect = 0;
-    for (size_t z = 0; z < ref_iquv.get_z_dim(); ++z) {
-      for (size_t y = 0; y < ref_iquv.get_y_dim(); ++y) {
-        for (size_t x = 0; x < ref_iquv.get_x_dim(); ++x) {
-          if (std::fabs(ref_iquv(z, y, x) - image_iquv(z, y, x)) > 0.01) {
-            ++total_incorrect;
-            // std::cout << "Incorrect value. Expected " << ref_iquv(z, y, x)
-            //           << " but got " << image_iquv(z, y, x) << std::endl;
+    if (TEST) {
+      int total_incorrect = 0;
+      for (size_t z = 0; z < ref_iquv.get_z_dim(); ++z) {
+        for (size_t y = 0; y < ref_iquv.get_y_dim(); ++y) {
+          for (size_t x = 0; x < ref_iquv.get_x_dim(); ++x) {
+            if (std::fabs(ref_iquv(z, y, x) - image_iquv(z, y, x)) > 0.01) {
+              ++total_incorrect;
+            }
           }
         }
       }
+      std::cout << "Testing image result. " << total_incorrect << " incorrect values." << std::endl;
     }
-    std::cout << "Testing image result. " << total_incorrect << " incorrect values." << std::endl;
 
+    const long unsigned imshape[] = {4, grid_size, grid_size};
+    npy::SaveArrayAsNumpy(
+        "image.npy", false, 3, imshape,
+        std::vector<double>(image_iquv.data(),
+                            image_iquv.data() + image_iquv.size()));
 
-    // const long unsigned imshape[] = {4, grid_size, grid_size};
-    // npy::SaveArrayAsNumpy(
-    //     "image.npy", false, 3, imshape,
-    //     std::vector<double>(image_iquv.data(),
-    //                         image_iquv.data() + image_iquv.size()));
-
-  }
 }
 
 
