@@ -207,13 +207,22 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
   r_freq->queue(freq);
   r_base->queue(base);
   r_uvw->queue(uvw_b);
-  
+
+  // start timing, calculate how much
+  std::chrono::_V2::steady_clock::time_point start;
+    std::chrono::_V2::steady_clock::time_point stop;
+    std::chrono::milliseconds duration;
   while(global_reading) {
+    start = std::chrono::steady_clock::now();
     std::clog << ">>> Copying main data" << std::endl;
     auto vis = r3->fill();
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
     memcpy(visibilities.data(), main_vis.data(), main_vis.bytes());
     r3->queue(vis);
+    stop = std::chrono::steady_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+    std::clog << "Sent " << main_vis.bytes() << " in " << duration.count() << " milliseconds. " <<
+      ((float)main_vis.bytes()/1e9)/((float)duration.count()/1000.0f) << " GB/s"<< std::endl;
   }
 
   global_reading = false;
@@ -289,18 +298,19 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, 
                     meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
 
-    std::chrono::_V2::system_clock::time_point start =
-      std::chrono::high_resolution_clock::now();
-    std::chrono::_V2::system_clock::time_point stop;
-    std::chrono::seconds duration;
+    std::chrono::_V2::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    std::chrono::_V2::steady_clock::time_point stop;
+    std::chrono::milliseconds duration;
 
     std::clog << ">>> Run gridding" << std::endl;
     proxy.gridding(*plan, frequencies, visibilities, uvw, baselines, aterms,
                   aterms_offsets, spread);
     proxy.get_final_grid();
-    stop = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
-    std::clog << ">>> Gridding in " << duration.count() << "s"<< std::endl;
+    stop = std::chrono::steady_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+    std::clog << std::this_thread::get_id << " >>> Gridding in " << duration.count() << "ms"<< std::endl;
+  }
 
     std::clog << "Run FFT" << std::endl;
     proxy.transform(idg::FourierDomainToImageDomain);
