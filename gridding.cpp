@@ -24,7 +24,7 @@
 #include "idg-util.h"  // Don't need if not using the test Data class
 #include "npy.hpp"
 
-#include "r3.hpp"
+#include "lender.hpp"
 
 #define TEST false
 #define CHANPAR 1 // number of channels to put into one grid
