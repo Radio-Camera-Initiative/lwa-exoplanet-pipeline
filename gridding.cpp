@@ -26,9 +26,10 @@
 
 #include "lender.hpp"
 
-#define TEST false
+#define TEST true
 #define CHANPAR 1 // number of channels to put into one grid
-#define CHANTHR 8 // number of IDG instances to make
+#define CHANTHR 1 // number of IDG instances to make 
+// [AT 8 IDG, ADDING PROXY IN START IS TOO MUCH MEMORY]
 
 const float SPEED_OF_LIGHT = 299792458.0;
 const float MAX_BL_M = 15392.2;
@@ -186,32 +187,23 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3, 
              const string& ms_path, metadata meta,
              std::shared_ptr<recycle_memory<float>> r_uvw,
-             std::shared_ptr<recycle_memory<float>> r_freq,
-             std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base) {
+             idg::Array1D<float> &frequencies,
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) {
 
   idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, CHANPAR, meta.nr_correlations);
-
-  auto freq = r_freq->fill();
-  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
-
-  auto base = r_base->fill();
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
-          meta.nr_baselines);
-
+  
   auto uvw_b = r_uvw->fill();
   idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
+
+  r_uvw->queue(uvw_b);
 
   std::clog << ">>> Reading data" << std::endl;
   getData(ms_path, meta, uvw, frequencies, baselines, main_vis);
 
-  r_freq->queue(freq);
-  r_base->queue(base);
-  r_uvw->queue(uvw_b);
-
   // start timing, calculate how much
   std::chrono::_V2::steady_clock::time_point start;
-    std::chrono::_V2::steady_clock::time_point stop;
-    std::chrono::milliseconds duration;
+  std::chrono::_V2::steady_clock::time_point stop;
+  std::chrono::milliseconds duration;
   while(global_reading) {
     start = std::chrono::steady_clock::now();
     std::clog << ">>> Copying main data" << std::endl;
@@ -231,14 +223,11 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
 void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              metadata meta,
              std::shared_ptr<recycle_memory<float>> r_uvw,
-             std::shared_ptr<recycle_memory<float>> r_freq,
-             std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base) { // proxy
+             idg::Array1D<float> &frequencies,
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) { // proxy
   
   std::clog << ">>> Initialize IDG proxy." << std::endl;
   idg::proxy::cuda::Generic proxy;
-
-  auto freq = r_freq->operate();
-  idg::Array1D<float> frequencies(freq.get(), meta.nr_channels);
 
   float end_frequency = frequencies(frequencies.size() - 1);
   std::clog << "end frequency = " << end_frequency << std::endl;
@@ -269,10 +258,6 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
   // no w-tiling, i.e. not using w_step
 
   proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
-
-  auto base = r_base->operate();
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines(base.get(),
-          meta.nr_baselines);
 
   auto uvw_b = r_uvw->operate();
   idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
@@ -309,7 +294,7 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
     proxy.get_final_grid();
     stop = std::chrono::steady_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
-    std::clog << std::this_thread::get_id << " >>> Gridding in " << duration.count() << "ms"<< std::endl;
+    std::clog << " >>> thread " << std::this_thread::get_id  << ": Gridding in " << duration.count() << "ms"<< std::endl;
   }
 
     std::clog << "Run FFT" << std::endl;
@@ -366,16 +351,15 @@ int main(int argc, char *argv[]) {
         << "offset of v = " << offsetof(idg::UVW<float>, v) << '\n'
         << "offset of w = " << offsetof(idg::UVW<float>, w) << '\n';
 
-  // change each of these to recyclers?
-  std::clog << ">>> Allocating metadata arrays" << std::endl;
-  std::vector<size_t> shape_freq {meta.nr_channels};
-  std::shared_ptr<recycle_memory<float>> r_freq = 
-          std::make_shared<recycle_memory<float>>(shape_freq, 1);
-
-  std::vector<size_t> shape_base {meta.nr_baselines};
-  std::shared_ptr<recycle_memory<std::pair<unsigned int, unsigned int>>> r_base = 
-          std::make_shared<recycle_memory<std::pair<unsigned int, unsigned int>>>(shape_base, 1);
   
+  // This proxy is literally just for these two arrays.
+  idg::proxy::cuda::Generic proxy;
+  std::clog << ">>> Allocating metadata arrays" << std::endl;
+  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta.nr_channels);
+  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
+      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
+          meta.nr_baselines);
+
   std::vector<size_t> shape_uvw {meta.nr_baselines, meta.nr_timesteps, 3};
   std::shared_ptr<recycle_memory<float>> r_uvw = 
           std::make_shared<recycle_memory<float>>(shape_uvw, 1);
@@ -386,11 +370,13 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<recycle_memory<complex<float>>> r3 = 
           std::make_shared<recycle_memory<complex<float>>>(shape, CHANTHR);
 
-  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, r_freq, r_base);
+  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, 
+          std::ref(frequencies), std::ref(baselines));
 
   std::vector<std::thread> threads(CHANTHR);
   for (auto& i : threads) {
-      i = std::thread(grid_operate_thread, r3, meta, r_uvw, r_freq, r_base);
+      i = std::thread(grid_operate_thread, r3, meta, r_uvw, 
+                std::ref(frequencies), std::ref(baselines));
   }
 
   measurement.join();
