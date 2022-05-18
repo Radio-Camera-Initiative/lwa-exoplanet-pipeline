@@ -204,7 +204,7 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
   std::chrono::_V2::steady_clock::time_point start;
   std::chrono::_V2::steady_clock::time_point stop;
   std::chrono::milliseconds duration;
-  while(global_reading) {
+  // while(global_reading) {
     start = std::chrono::steady_clock::now();
     std::clog << ">>> Copying main data" << std::endl;
     auto vis = r3->fill();
@@ -215,9 +215,9 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
     std::clog << "Sent " << main_vis.bytes() << " in " << duration.count() << " milliseconds. " <<
       ((float)main_vis.bytes()/1e9)/((float)duration.count()/1000.0f) << " GB/s"<< std::endl;
-  }
+  // }
 
-  global_reading = false;
+  // global_reading = false;
 }
 
 void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
@@ -278,7 +278,7 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
       kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
   std::clog << std::endl;
 
-  while (global_reading) {
+  // while (global_reading) {
     buffer_ptr vis = r3->operate();
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, 
                     meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
@@ -295,7 +295,6 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
     stop = std::chrono::steady_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
     std::clog << " >>> thread " << std::this_thread::get_id  << ": Gridding in " << duration.count() << "ms"<< std::endl;
-  }
 
     std::clog << "Run FFT" << std::endl;
     proxy.transform(idg::FourierDomainToImageDomain);
@@ -337,7 +336,7 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
         "image.npy", false, 3, imshape,
         std::vector<double>(image_iquv.data(),
                             image_iquv.data() + image_iquv.size()));
-
+  // }
 }
 
 
