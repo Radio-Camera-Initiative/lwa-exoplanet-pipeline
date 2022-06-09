@@ -220,6 +220,28 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
   // global_reading = false;
 }
 
+// the first three are input and the last is output
+void flag_data(buffer_ptr<std::complex<float>> vis_bp, 
+                buffer_ptr<float> uvw_bp, 
+                buffer_ptr<std::pair<unsigned int, unsigned int>> baselines, 
+                buffer_ptr<bool> flags_bp) {
+    auto s = vis_bp->shape;
+    int n_timesteps = s[0];
+    int n_bl = s[1];
+    int n_chan = s[2];
+    int n_corr = s[3];
+    // uvw should have shape (n_timesteps, n_bl, 3)
+    // baselines should have shape (n_timesteps, b_bl, 2) corresponding to antenna indices
+    // flags_bp should have shape (n_timesteps, n_bl, n_chan, n_corr
+
+    // as a first step fill flags_bp with False
+    size_t size = 1;
+    for (auto iter = flags_bp->shape.begin(); iter != flags_bp->shape.end(); iter++) {
+        size *= *iter;
+    }
+    memset(flags_bp.get(), 0x00, sizeof(bool)*size);
+}
+
 void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              metadata meta,
              std::shared_ptr<recycle_memory<float>> r_uvw,
