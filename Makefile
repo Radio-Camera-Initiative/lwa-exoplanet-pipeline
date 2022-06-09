@@ -7,6 +7,7 @@ CUDA_PATH       ?= /usr/local/cuda-11.2
 CUDA_INC_PATH   ?= $(CUDA_PATH)/include
 CUDA_BIN_PATH   ?= $(CUDA_PATH)/bin
 CUDA_LIB_PATH   ?= $(CUDA_PATH)/lib
+LENDER_INC_PATH     ?= ../rci-memory-lender
 
 # CUDA code generation flags
 GENCODE_FLAGS   := -gencode arch=compute_35,code=sm_35 \
@@ -45,16 +46,15 @@ endif
 NVCCFLAGS += --compiler-bindir $(CC)
 
 
-INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH)
+INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH) -I$(LENDER_INC_PATH)
 
-DEPS = r3.hpp 
 SOURCES = gridding.cpp apply.o
 
 TARGETS = gridding apply.o
 
 all: $(TARGETS)
 
-gridding: $(SOURCES) $(DEPS)
+gridding: $(SOURCES)
 	$(CC) $(FLAGS) $(SOURCES) -o $(TARGETS) -O3 $(LDFLAGS) $(INCLUDE)
 
 apply.o: /fastpool/mlaures/calibration-application/calibration.cu
