@@ -26,9 +26,9 @@
 
 #include "lender.hpp"
 
-#define TEST true
-#define CHANPAR 1 // number of channels to put into one grid
-#define CHANTHR 1 // number of IDG instances to make 
+#define TEST false
+#define PAR_CHAN 128 // number of channels to put into one grid
+#define CHAN_THR 1 // number of IDG instances to make 
 // [AT 8 IDG, ADDING PROXY IN START IS TOO MUCH MEMORY]
 
 const float SPEED_OF_LIGHT = 299792458.0;
@@ -41,7 +41,7 @@ using std::complex;
 using std::string;
 
 struct metadata {
-  unsigned int nr_correlations;
+  unsigned int nr_polarizations;
   unsigned int nr_rows;
   unsigned int nr_stations;
   unsigned int nr_baselines;
@@ -53,15 +53,16 @@ struct metadata {
 metadata getMetadata(const string &ms_path) {
   casacore::MeasurementSet ms(ms_path);
   casacore::ROArrayColumn<casacore::Complex> data_column(
-      ms, casacore::MS::columnName(casacore::MSMainEnums::DATA));
+      ms, casacore::MS::columnName(casacore::MSMainEnums::DATA)); // CORRECTED_DATA
   metadata meta{};
-  meta.nr_correlations = 4;
+  meta.nr_polarizations = 4;
   meta.nr_rows = data_column.nrow();
   meta.nr_stations = ms.antenna().nrow();
   meta.nr_baselines = (meta.nr_stations * (meta.nr_stations - 1)) / 2;
   // assume there's no autocorrelation in the data
-  assert(meta.nr_rows % meta.nr_baselines == 0);
-  meta.nr_timesteps = meta.nr_rows / meta.nr_baselines;
+  // assert(meta.nr_rows % meta.nr_baselines == 0);
+  // meta.nr_timesteps = meta.nr_rows / meta.nr_baselines;
+  meta.nr_timesteps = 1;
 
   casacore::ROScalarColumn<double> exposure_col(
       ms, casacore::MS::columnName(casacore::MSMainEnums::EXPOSURE));
@@ -76,36 +77,49 @@ metadata getMetadata(const string &ms_path) {
   std::clog << "nr_stations = " << meta.nr_stations << std::endl;
   std::clog << "nr_baselines = " << meta.nr_baselines << std::endl;
   std::clog << "nr_timesteps = " << meta.nr_timesteps << std::endl;
-  std::clog << "nr_channels = " << meta.nr_channels << std::endl;
-  std::clog << "nr_correlations = " << meta.nr_correlations << std::endl;
+  std::clog << "nr_channels = " << meta.nr_channels << " (using) " << PAR_CHAN << std::endl;
+  std::clog << "nr_polarizations = " << meta.nr_polarizations << std::endl;
 
   return meta;
 }
 
 void reorderData(const unsigned int nr_timesteps,
-                 const unsigned int nr_baselines,
+                 const unsigned int nr_rows,
                  const unsigned int nr_channels,
                  const casacore::Array<double> &uvw_rows,
                  const casacore::Array<complex<float>> &data_rows,
                  idg::Array2D<idg::UVW<float>> &uvw,
-                 idg::Array4D<complex<float>> &visibilities) {
+                 idg::Array4D<complex<float>> &visibilities,
+                 idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 // TODO use one of the specialization of Array to iterate.
 #pragma omp parallel for default(none) shared(visibilities, uvw, uvw_rows, data_rows)
   for (unsigned int t = 0; t < nr_timesteps; ++t) {
-    for (unsigned int bl = 0; bl < nr_baselines; ++bl) {
-      unsigned int row_i = bl + t * nr_baselines;
+    for (unsigned int rw = 0; rw < nr_rows; ++rw) {
+      unsigned int row_i = rw + t * nr_rows;
 
       idg::UVW<float> idg_uvw = {float(uvw_rows(IPosition(2, 0, row_i))),
-                                 float(uvw_rows(IPosition(2, 1, row_i))),
-                                 float(uvw_rows(IPosition(2, 2, row_i)))};
-      uvw(bl, t) = idg_uvw;
+                                  float(uvw_rows(IPosition(2, 1, row_i))),
+                                  float(uvw_rows(IPosition(2, 2, row_i)))};
+      uvw(rw, t) = idg_uvw;
 
-      int copy_chan = nr_channels;
-      for (unsigned int chan = 0; chan < CHANPAR; ++chan) {
-        visibilities(bl, t, chan, 0) = data_rows(IPosition(3, 0, copy_chan, row_i));
-        visibilities(bl, t, chan, 1) = data_rows(IPosition(3, 1, copy_chan, row_i));
-        visibilities(bl, t, chan, 2) = data_rows(IPosition(3, 2, copy_chan, row_i));
-        visibilities(bl, t, chan, 3) = data_rows(IPosition(3, 3, copy_chan, row_i));
+      std::pair<unsigned int, unsigned int> curr_pair = correlations(row_i);
+      if (curr_pair.first == curr_pair.second) {
+        // set to 0
+        for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
+          visibilities(rw, t, chan, 0) = 0;
+          visibilities(rw, t, chan, 1) = 0;
+          visibilities(rw, t, chan, 2) = 0;
+          visibilities(rw, t, chan, 3) = 0;
+        }
+      } else {
+        
+
+        for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
+          visibilities(rw, t, chan, 0) = data_rows(IPosition(3, 0, chan, row_i));
+          visibilities(rw, t, chan, 1) = data_rows(IPosition(3, 1, chan, row_i));
+          visibilities(rw, t, chan, 2) = data_rows(IPosition(3, 2, chan, row_i));
+          visibilities(rw, t, chan, 3) = data_rows(IPosition(3, 3, chan, row_i));
+        }
       }
     }
   }
@@ -114,7 +128,7 @@ void reorderData(const unsigned int nr_timesteps,
 void getData(const string &ms_path, metadata meta,
              idg::Array2D<idg::UVW<float>> &uvw,
              idg::Array1D<float> &frequencies,
-             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines,
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations,
              idg::Array4D<complex<float>> &visibilities) {
   casacore::MeasurementSet ms(ms_path);
   casacore::ROArrayColumn<casacore::Complex> data_column(
@@ -134,18 +148,18 @@ void getData(const string &ms_path, metadata meta,
       << std::endl;
   casacore::Array<double> src_freqs = freqs(0);
   assert(src_freqs.size() == meta.nr_channels);
-  for (unsigned int i = 0; i < meta.nr_channels; ++i)
+  for (unsigned int i = 0; i < PAR_CHAN; ++i)
     frequencies(i) = float(src_freqs(IPosition(1, i)));
   std::clog << "done with reading frequencies." << std::endl;
 
-  casacore::Slicer first_int_rows(IPosition(1, 0), IPosition(1, meta.nr_baselines));
+  casacore::Slicer first_int_rows(IPosition(1, 0), IPosition(1, meta.nr_rows));
   casacore::Vector<int> ant1_vec = ant1.getColumnRange(first_int_rows);
   casacore::Vector<int> ant2_vec = ant2.getColumnRange(first_int_rows);
 #pragma omp parallel for default(none) shared(baselines, ant1_vec, ant2_vec)
-  for (unsigned int i = 0; i < meta.nr_baselines; ++i) {
+  for (unsigned int i = 0; i < meta.nr_rows; ++i) {
     std::pair<unsigned int, unsigned int> curr_pair = {ant1_vec(i),
                                                        ant2_vec(i)};
-    baselines(i) = curr_pair;
+    correlations(i) = curr_pair;
   }
 
   std::chrono::_V2::system_clock::time_point start =
@@ -169,8 +183,8 @@ void getData(const string &ms_path, metadata meta,
   std::clog << "Done reading measurement set in " << duration.count() << "s"
             << std::endl;
   start = std::chrono::high_resolution_clock::now();
-  reorderData(meta.nr_timesteps, meta.nr_baselines, meta.nr_channels, 
-              uvw_rows, data_rows, uvw, visibilities);
+  reorderData(meta.nr_timesteps, meta.nr_rows, meta.nr_channels, 
+              uvw_rows, data_rows, uvw, visibilities, correlations);
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Reordered visibilities in " << duration.count() << "s"
@@ -188,17 +202,17 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
              const string& ms_path, metadata meta,
              std::shared_ptr<recycle_memory<float>> r_uvw,
              idg::Array1D<float> &frequencies,
-             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) {
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 
-  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_baselines, meta.nr_timesteps, CHANPAR, meta.nr_correlations);
+  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
   
   auto uvw_b = r_uvw->fill();
-  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
-
-  r_uvw->queue(uvw_b);
+  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
 
   std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta, uvw, frequencies, baselines, main_vis);
+  getData(ms_path, meta, uvw, frequencies, correlations, main_vis);
+
+  r_uvw->queue(uvw_b);
 
   // start timing, calculate how much
   std::chrono::_V2::steady_clock::time_point start;
@@ -208,7 +222,7 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
     start = std::chrono::steady_clock::now();
     std::clog << ">>> Copying main data" << std::endl;
     auto vis = r3->fill();
-    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
+    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
     memcpy(visibilities.data(), main_vis.data(), main_vis.bytes());
     r3->queue(vis);
     stop = std::chrono::steady_clock::now();
@@ -224,7 +238,7 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
              metadata meta,
              std::shared_ptr<recycle_memory<float>> r_uvw,
              idg::Array1D<float> &frequencies,
-             idg::Array1D<std::pair<unsigned int, unsigned int>> &baselines) { // proxy
+             idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) { // proxy
   
   std::clog << ">>> Initialize IDG proxy." << std::endl;
   idg::proxy::cuda::Generic proxy;
@@ -253,14 +267,14 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
   idg::Array1D<float> shift = idg::get_zero_shift();
 
   std::shared_ptr<idg::Grid> grid =
-      proxy.allocate_grid(1, meta.nr_correlations, grid_size, grid_size);
+      proxy.allocate_grid(1, meta.nr_polarizations, grid_size, grid_size);
   proxy.set_grid(grid);
   // no w-tiling, i.e. not using w_step
 
   proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
 
   auto uvw_b = r_uvw->operate();
-  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_baselines, meta.nr_timesteps);
+  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
 
   // Create reference array (vector)
   std::vector<long unsigned> im_shape {4, grid_size, grid_size};
@@ -275,13 +289,13 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
   idg::Plan::Options options;
   options.plan_strict = true;
   const std::unique_ptr<idg::Plan> plan = proxy.make_plan(
-      kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
+      kernel_size, frequencies, uvw, correlations, aterms_offsets, options);
   std::clog << std::endl;
 
   // while (global_reading) {
     buffer_ptr vis = r3->operate();
-    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_baselines, 
-                    meta.nr_timesteps, meta.nr_channels, meta.nr_correlations);
+    idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_rows, 
+                    meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
 
     std::chrono::_V2::steady_clock::time_point start =
       std::chrono::steady_clock::now();
@@ -289,7 +303,7 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
     std::chrono::milliseconds duration;
 
     std::clog << ">>> Run gridding" << std::endl;
-    proxy.gridding(*plan, frequencies, visibilities, uvw, baselines, aterms,
+    proxy.gridding(*plan, frequencies, visibilities, uvw, correlations, aterms,
                   aterms_offsets, spread);
     proxy.get_final_grid();
     stop = std::chrono::steady_clock::now();
@@ -341,7 +355,8 @@ void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3
 
 
 int main(int argc, char *argv[]) {
-  string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
+  string ms_path = "/fastpool/data/LWA_calibrated.ms";
+  // string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
 
   metadata meta = getMetadata(ms_path);
 
@@ -350,32 +365,36 @@ int main(int argc, char *argv[]) {
         << "offset of v = " << offsetof(idg::UVW<float>, v) << '\n'
         << "offset of w = " << offsetof(idg::UVW<float>, w) << '\n';
 
-  
-  // This proxy is literally just for these two arrays.
-  idg::proxy::cuda::Generic proxy;
   std::clog << ">>> Allocating metadata arrays" << std::endl;
-  idg::Array1D<float> frequencies = proxy.allocate_array1d<float>(meta.nr_channels);
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
-      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
-          meta.nr_baselines);
+  std::vector<size_t> shape_freq {PAR_CHAN};
+  recycle_memory<float> r_freq = recycle_memory<float>(shape_freq, 1);
+  auto freq = r_freq.fill();
+  std::vector<size_t> shape_correlations {meta.nr_rows};
+  recycle_memory<std::pair<unsigned int, unsigned int>> r_correlations = 
+          recycle_memory<std::pair<unsigned int, unsigned int>>(shape_correlations, 1);
+  auto corrs = r_correlations.fill();
 
-  std::vector<size_t> shape_uvw {meta.nr_baselines, meta.nr_timesteps, 3};
+  idg::Array1D<float> frequencies(freq.get(), PAR_CHAN);
+  idg::Array1D<std::pair<unsigned int, unsigned int>> correlations(corrs.get(),
+          meta.nr_rows);
+
+  std::vector<size_t> shape_uvw {meta.nr_rows, meta.nr_timesteps, 3};
   std::shared_ptr<recycle_memory<float>> r_uvw = 
           std::make_shared<recycle_memory<float>>(shape_uvw, 1);
 
   std::clog << ">>> Allocating vis" << std::endl;
 
-  std::vector<size_t> shape {meta.nr_baselines, meta.nr_timesteps, CHANPAR, meta.nr_correlations};
+  std::vector<size_t> shape {meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations};
   std::shared_ptr<recycle_memory<complex<float>>> r3 = 
-          std::make_shared<recycle_memory<complex<float>>>(shape, CHANTHR);
+          std::make_shared<recycle_memory<complex<float>>>(shape, CHAN_THR);
 
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, 
-          std::ref(frequencies), std::ref(baselines));
+          std::ref(frequencies), std::ref(correlations));
 
-  std::vector<std::thread> threads(CHANTHR);
+  std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
       i = std::thread(grid_operate_thread, r3, meta, r_uvw, 
-                std::ref(frequencies), std::ref(baselines));
+                std::ref(frequencies), std::ref(correlations));
   }
 
   measurement.join();

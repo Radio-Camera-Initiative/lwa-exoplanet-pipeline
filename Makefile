@@ -48,17 +48,17 @@ NVCCFLAGS += --compiler-bindir $(CC)
 
 INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH) -I$(LENDER_INC_PATH)
 
-SOURCES = gridding.cpp apply.o
+SOURCES = gridding.cpp # apply.o
 
-TARGETS = gridding apply.o
+TARGETS = gridding
 
-all: $(TARGETS)
+all: gridding # apply.o
 
 gridding: $(SOURCES)
 	$(CC) $(FLAGS) $(SOURCES) -o $(TARGETS) -O3 $(LDFLAGS) $(INCLUDE)
 
-apply.o: /fastpool/mlaures/calibration-application/calibration.cu
-	$(NVCC) $(NVCCFLAGS) -O3 $(EXTRA_NVCCFLAGS) $(GENCODE_FLAGS) -I$(CUDA_INC_PATH) -o $@ -c $<
+# apply.o: /fastpool/mlaures/calibration-application/calibration.cu
+# 	$(NVCC) $(NVCCFLAGS) -O3 $(EXTRA_NVCCFLAGS) $(GENCODE_FLAGS) -I$(CUDA_INC_PATH) -o $@ -c $<
 
 # $(TARGETS): r3.o main.o
 # 	$(CC) $(FLAGS) $^ -o $@ -O3 $(LDFLAGS)
