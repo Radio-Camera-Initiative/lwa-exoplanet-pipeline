@@ -198,9 +198,9 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 }
 
 
-void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3, 
+void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, 
              const string& ms_path, metadata meta,
-             std::shared_ptr<recycle_memory<float>> r_uvw,
+             std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 
@@ -234,9 +234,9 @@ void ms_fill_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
   // global_reading = false;
 }
 
-void grid_operate_thread(std::shared_ptr<recycle_memory<std::complex<float>>> r3,
+void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
              metadata meta,
-             std::shared_ptr<recycle_memory<float>> r_uvw,
+             std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) { // proxy
   
@@ -367,11 +367,11 @@ int main(int argc, char *argv[]) {
 
   std::clog << ">>> Allocating metadata arrays" << std::endl;
   std::vector<size_t> shape_freq {PAR_CHAN};
-  recycle_memory<float> r_freq = recycle_memory<float>(shape_freq, 1);
+  library<float> r_freq = library<float>(shape_freq, 1);
   auto freq = r_freq.fill();
   std::vector<size_t> shape_correlations {meta.nr_rows};
-  recycle_memory<std::pair<unsigned int, unsigned int>> r_correlations = 
-          recycle_memory<std::pair<unsigned int, unsigned int>>(shape_correlations, 1);
+  library<std::pair<unsigned int, unsigned int>> r_correlations = 
+          library<std::pair<unsigned int, unsigned int>>(shape_correlations, 1);
   auto corrs = r_correlations.fill();
 
   idg::Array1D<float> frequencies(freq.get(), PAR_CHAN);
@@ -379,14 +379,14 @@ int main(int argc, char *argv[]) {
           meta.nr_rows);
 
   std::vector<size_t> shape_uvw {meta.nr_rows, meta.nr_timesteps, 3};
-  std::shared_ptr<recycle_memory<float>> r_uvw = 
-          std::make_shared<recycle_memory<float>>(shape_uvw, 1);
+  std::shared_ptr<library<float>> r_uvw = 
+          std::make_shared<library<float>>(shape_uvw, 1);
 
   std::clog << ">>> Allocating vis" << std::endl;
 
   std::vector<size_t> shape {meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations};
-  std::shared_ptr<recycle_memory<complex<float>>> r3 = 
-          std::make_shared<recycle_memory<complex<float>>>(shape, CHAN_THR);
+  std::shared_ptr<library<complex<float>>> r3 = 
+          std::make_shared<library<complex<float>>>(shape, CHAN_THR);
 
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, 
           std::ref(frequencies), std::ref(correlations));
