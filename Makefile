@@ -8,6 +8,7 @@ CUDA_INC_PATH   ?= $(CUDA_PATH)/include
 CUDA_BIN_PATH   ?= $(CUDA_PATH)/bin
 CUDA_LIB_PATH   ?= $(CUDA_PATH)/lib
 LENDER_INC_PATH     ?= ../rci-memory-lender
+CALIBRATION_INC_PATH    ?= ../calibration-application
 
 # CUDA code generation flags
 GENCODE_FLAGS   := -gencode arch=compute_35,code=sm_35 \
@@ -46,19 +47,19 @@ endif
 NVCCFLAGS += --compiler-bindir $(CC)
 
 
-INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH) -I$(LENDER_INC_PATH)
+INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH) -I$(LENDER_INC_PATH) -I$(CALIBRATION_INC_PATH)
 
-SOURCES = gridding.cpp # apply.o
+SOURCES = gridding.cpp apply.o
 
 TARGETS = gridding
 
-all: gridding # apply.o
+all: gridding apply.o
 
 gridding: $(SOURCES)
 	$(CC) $(FLAGS) $(SOURCES) -o $(TARGETS) -O3 $(LDFLAGS) $(INCLUDE)
 
-# apply.o: /fastpool/mlaures/calibration-application/calibration.cu
-# 	$(NVCC) $(NVCCFLAGS) -O3 $(EXTRA_NVCCFLAGS) $(GENCODE_FLAGS) -I$(CUDA_INC_PATH) -o $@ -c $<
+apply.o: /fastpool/mlaures/calibration-application/calibration.cu
+	$(NVCC) $(NVCCFLAGS) -O3 $(EXTRA_NVCCFLAGS) $(GENCODE_FLAGS) -I$(CUDA_INC_PATH) -o $@ -c $<
 
 # $(TARGETS): r3.o main.o
 # 	$(CC) $(FLAGS) $^ -o $@ -O3 $(LDFLAGS)

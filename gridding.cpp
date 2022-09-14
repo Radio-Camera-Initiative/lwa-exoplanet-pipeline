@@ -25,6 +25,7 @@
 #include "npy.hpp"
 
 #include "lender.hpp"
+#include "calibration.cuh"
 
 #define TEST false
 #define PAR_CHAN 128 // number of channels to put into one grid
@@ -235,6 +236,7 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
 }
 
 void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
+             std::shared_ptr<library<bool>> flag_mask,
              metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
@@ -294,6 +296,15 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
 
   // while (global_reading) {
     buffer_ptr vis = r3->operate();
+
+    // Do flagging
+    auto flags = flag_mask->fill();
+    memset(flags.get(), 0x00, sizeof(bool)*flags.size);
+
+    // Application in GPU (just switching #s for nchan and nbaseline for now)
+    std::clog << ">>> Running flagging" << std::endl;
+    call_flag_mask_kernel(meta.nr_rows, PAR_CHAN, meta.nr_polarizations, flags.get(), (float*) vis.get());
+
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_rows, 
                     meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
 
@@ -388,12 +399,15 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<library<complex<float>>> r3 = 
           std::make_shared<library<complex<float>>>(shape, CHAN_THR);
 
+  std::shared_ptr<library<bool>> flag_mask = 
+          std::make_shared<library<bool>>(shape, 1);
+
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, 
           std::ref(frequencies), std::ref(correlations));
 
   std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
-      i = std::thread(grid_operate_thread, r3, meta, r_uvw, 
+      i = std::thread(grid_operate_thread, r3, flag_mask, meta, r_uvw, 
                 std::ref(frequencies), std::ref(correlations));
   }
 
