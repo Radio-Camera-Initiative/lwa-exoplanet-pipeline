@@ -89,11 +89,13 @@ void reorderData(const unsigned int nr_timesteps,
                  const unsigned int nr_channels,
                  const casacore::Array<double> &uvw_rows,
                  const casacore::Array<complex<float>> &data_rows,
+                 const casacore::Array<bool> &flag_rows,
                  idg::Array2D<idg::UVW<float>> &uvw,
                  idg::Array4D<complex<float>> &visibilities,
+                 idg::Array4D<bool> &flags,
                  idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 // TODO use one of the specialization of Array to iterate.
-#pragma omp parallel for default(none) shared(visibilities, uvw, uvw_rows, data_rows)
+#pragma omp parallel for default(none) shared(visibilities, uvw, flags, flag_rows, uvw_rows, data_rows)
   for (unsigned int t = 0; t < nr_timesteps; ++t) {
     for (unsigned int rw = 0; rw < nr_rows; ++rw) {
       unsigned int row_i = rw + t * nr_rows;
@@ -111,6 +113,11 @@ void reorderData(const unsigned int nr_timesteps,
           visibilities(rw, t, chan, 1) = 0;
           visibilities(rw, t, chan, 2) = 0;
           visibilities(rw, t, chan, 3) = 0;
+
+          flags(rw, t, chan, 0) = 0;
+          flags(rw, t, chan, 1) = 0;
+          flags(rw, t, chan, 2) = 0;
+          flags(rw, t, chan, 3) = 0;
         }
       } else {
         
@@ -120,6 +127,11 @@ void reorderData(const unsigned int nr_timesteps,
           visibilities(rw, t, chan, 1) = data_rows(IPosition(3, 1, chan, row_i));
           visibilities(rw, t, chan, 2) = data_rows(IPosition(3, 2, chan, row_i));
           visibilities(rw, t, chan, 3) = data_rows(IPosition(3, 3, chan, row_i));
+
+          flags(rw, t, chan, 0) = flag_rows(IPosition(3, 0, chan, row_i));
+          flags(rw, t, chan, 1) = flag_rows(IPosition(3, 1, chan, row_i));
+          flags(rw, t, chan, 2) = flag_rows(IPosition(3, 2, chan, row_i));
+          flags(rw, t, chan, 3) = flag_rows(IPosition(3, 3, chan, row_i));
         }
       }
     }
@@ -128,6 +140,7 @@ void reorderData(const unsigned int nr_timesteps,
 
 void getData(const string &ms_path, metadata meta,
              idg::Array2D<idg::UVW<float>> &uvw,
+             idg::Array4D<bool> &flags,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations,
              idg::Array4D<complex<float>> &visibilities) {
@@ -143,6 +156,8 @@ void getData(const string &ms_path, metadata meta,
   casacore::ROArrayColumn<double> freqs(
       ms.spectralWindow(), casacore::MSSpectralWindow::columnName(
                                casacore::MSSpectralWindowEnums::CHAN_FREQ));
+  casacore::ROArrayColumn<bool> flag_column(
+      ms, casacore::MS::columnName(casacore::MSMainEnums::FLAG));
 
   std::clog
       << "Reading baseline pairs and frequencies data from the measurement set."
@@ -179,13 +194,14 @@ void getData(const string &ms_path, metadata meta,
 
   const casacore::Array<complex<float>> data_rows = data_column.getColumn();
   const casacore::Array<double> uvw_rows = uvw_column.getColumn();
+  const casacore::Array<bool> flag_rows = flag_column.getColumn();
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Done reading measurement set in " << duration.count() << "s"
             << std::endl;
   start = std::chrono::high_resolution_clock::now();
   reorderData(meta.nr_timesteps, meta.nr_rows, meta.nr_channels, 
-              uvw_rows, data_rows, uvw, visibilities, correlations);
+              uvw_rows, data_rows, flag_rows, uvw, visibilities, flags, correlations);
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Reordered visibilities in " << duration.count() << "s"
@@ -202,6 +218,7 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, 
              const string& ms_path, metadata meta,
              std::shared_ptr<library<float>> r_uvw,
+             std::shared_ptr<library<bool>> r_flag,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 
@@ -210,10 +227,14 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
   auto uvw_b = r_uvw->fill();
   idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
 
+  auto flag_b = r_flag->fill();
+  idg::Array4D<bool> flags((bool*) flag_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
+
   std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta, uvw, frequencies, correlations, main_vis);
+  getData(ms_path, meta, uvw, flags, frequencies, correlations, main_vis);
 
   r_uvw->queue(uvw_b);
+  r_flag->queue(flag_b);
 
   // start timing, calculate how much
   std::chrono::_V2::steady_clock::time_point start;
@@ -298,8 +319,8 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
     buffer_ptr vis = r3->operate();
 
     // Do flagging
-    auto flags = flag_mask->fill();
-    memset(flags.get(), 0x00, sizeof(bool)*flags.size);
+    auto flags = flag_mask->operate();
+    // memset(flags.get(), 0x00, sizeof(bool)*flags.size);
 
     // Application in GPU (just switching #s for nchan and nbaseline for now)
     std::clog << ">>> Running flagging" << std::endl;
@@ -402,7 +423,7 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<library<bool>> flag_mask = 
           std::make_shared<library<bool>>(shape, 1);
 
-  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, 
+  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, flag_mask,
           std::ref(frequencies), std::ref(correlations));
 
   std::vector<std::thread> threads(CHAN_THR);
