@@ -256,8 +256,26 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
   // global_reading = false;
 }
 
+using namespace std::complex_literals;
+void fill_jones(std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
+  auto jones = jones_lib->fill();
+  // make into identity matrix
+  for (int a = 0; a < meta.nr_stations; a++) {
+    for (int c = 0; c < PAR_CHAN; c++) {
+      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
+      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
+      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
+      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
+    }
+  }
+
+  // TODO: some jonesy thing
+  jones_lib->queue(jones);
+}
+
 void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
              std::shared_ptr<library<bool>> flag_mask,
+             std::shared_ptr<library<std::complex<float>>> jones_lib,
              metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
@@ -307,14 +325,6 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
   bool t = false;
   npy::LoadArrayFromNumpy("reference.npy", im_shape, t, temp_data);
 
-  // Create plan
-  std::clog << ">>> Creating plan" << std::endl;
-  idg::Plan::Options options;
-  options.plan_strict = true;
-  const std::unique_ptr<idg::Plan> plan = proxy.make_plan(
-      kernel_size, frequencies, uvw, correlations, aterms_offsets, options);
-  std::clog << std::endl;
-
   // while (global_reading) {
     buffer_ptr vis = r3->operate();
 
@@ -325,6 +335,17 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
     // Application in GPU (just switching #s for nchan and nbaseline for now)
     std::clog << ">>> Running flagging" << std::endl;
     call_flag_mask_kernel(meta.nr_rows, PAR_CHAN, meta.nr_polarizations, flags.get(), (float*) vis.get());
+
+    auto jones = jones_lib->operate();
+    call_jones_kernel(PAR_CHAN, meta.nr_rows, meta.nr_polarizations, meta.nr_stations, (float*) vis.get(), (int*) correlations.data(), (float*) jones.get());
+
+    // Create plan
+    std::clog << ">>> Creating plan" << std::endl;
+    idg::Plan::Options options;
+    options.plan_strict = true;
+    const std::unique_ptr<idg::Plan> plan = proxy.make_plan(
+        kernel_size, frequencies, uvw, correlations, aterms_offsets, options);
+    std::clog << std::endl;
 
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_rows, 
                     meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
@@ -423,15 +444,22 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<library<bool>> flag_mask = 
           std::make_shared<library<bool>>(shape, 1);
 
+  std::vector<size_t> jshape {meta.nr_stations, PAR_CHAN, meta.nr_polarizations};
+  std::shared_ptr<library<complex<float>>> jones_lib = 
+          std::make_shared<library<complex<float>>>(shape, 1);
+
   std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, flag_mask,
           std::ref(frequencies), std::ref(correlations));
 
+  std::thread jones(fill_jones, jones_lib, meta);
+
   std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
-      i = std::thread(grid_operate_thread, r3, flag_mask, meta, r_uvw, 
+      i = std::thread(grid_operate_thread, r3, flag_mask, jones_lib, meta, r_uvw, 
                 std::ref(frequencies), std::ref(correlations));
   }
 
+  jones.join();
   measurement.join();
   for (auto& i : threads) {
       i.join();
