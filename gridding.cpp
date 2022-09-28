@@ -90,9 +90,11 @@ void reorderData(const unsigned int nr_timesteps,
                  const casacore::Array<double> &uvw_rows,
                  const casacore::Array<complex<float>> &data_rows,
                  const casacore::Array<bool> &flag_rows,
+                 const casacore::Array<float> &weight_rows,
                  idg::Array2D<idg::UVW<float>> &uvw,
                  idg::Array4D<complex<float>> &visibilities,
                  idg::Array4D<bool> &flags,
+                 idg::Array4D<float> &weights,
                  idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 // TODO use one of the specialization of Array to iterate.
 #pragma omp parallel for default(none) shared(visibilities, uvw, flags, flag_rows, uvw_rows, data_rows)
@@ -132,6 +134,11 @@ void reorderData(const unsigned int nr_timesteps,
           flags(rw, t, chan, 1) = flag_rows(IPosition(3, 1, chan, row_i));
           flags(rw, t, chan, 2) = flag_rows(IPosition(3, 2, chan, row_i));
           flags(rw, t, chan, 3) = flag_rows(IPosition(3, 3, chan, row_i));
+
+          weights(rw, t, chan, 0) = weight_rows(IPosition(3, 0, chan, row_i));
+          weights(rw, t, chan, 1) = weight_rows(IPosition(3, 1, chan, row_i));
+          weights(rw, t, chan, 2) = weight_rows(IPosition(3, 2, chan, row_i));
+          weights(rw, t, chan, 3) = weight_rows(IPosition(3, 3, chan, row_i));
         }
       }
     }
@@ -141,6 +148,7 @@ void reorderData(const unsigned int nr_timesteps,
 void getData(const string &ms_path, metadata meta,
              idg::Array2D<idg::UVW<float>> &uvw,
              idg::Array4D<bool> &flags,
+             idg::Array4D<float> &weights,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations,
              idg::Array4D<complex<float>> &visibilities) {
@@ -158,6 +166,8 @@ void getData(const string &ms_path, metadata meta,
                                casacore::MSSpectralWindowEnums::CHAN_FREQ));
   casacore::ROArrayColumn<bool> flag_column(
       ms, casacore::MS::columnName(casacore::MSMainEnums::FLAG));
+  casacore::ROArrayColumn<float> weight_column(
+      ms, casacore::MS::columnName(casacore::MSMainEnums::WEIGHT));
 
   std::clog
       << "Reading baseline pairs and frequencies data from the measurement set."
@@ -195,13 +205,15 @@ void getData(const string &ms_path, metadata meta,
   const casacore::Array<complex<float>> data_rows = data_column.getColumn();
   const casacore::Array<double> uvw_rows = uvw_column.getColumn();
   const casacore::Array<bool> flag_rows = flag_column.getColumn();
+  const casacore::Array<float> weight_rows = weight_column.getColumn();
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Done reading measurement set in " << duration.count() << "s"
             << std::endl;
   start = std::chrono::high_resolution_clock::now();
   reorderData(meta.nr_timesteps, meta.nr_rows, meta.nr_channels, 
-              uvw_rows, data_rows, flag_rows, uvw, visibilities, flags, correlations);
+              uvw_rows, data_rows, flag_rows, weight_rows, uvw, visibilities, 
+              flags, weights, correlations);
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
   std::clog << "Reordered visibilities in " << duration.count() << "s"
@@ -219,6 +231,7 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
              const string& ms_path, metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              std::shared_ptr<library<bool>> r_flag,
+             std::shared_ptr<library<float>> r_weight,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
 
@@ -230,11 +243,15 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
   auto flag_b = r_flag->fill();
   idg::Array4D<bool> flags((bool*) flag_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
 
+  auto weight_b = r_weight->fill();
+  idg::Array4D<float> weights(weight_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
+
   std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta, uvw, flags, frequencies, correlations, main_vis);
+  getData(ms_path, meta, uvw, flags, weights, frequencies, correlations, main_vis);
 
   r_uvw->queue(uvw_b);
   r_flag->queue(flag_b);
+  r_weight->queue(weight_b);
 
   // start timing, calculate how much
   std::chrono::_V2::steady_clock::time_point start;
@@ -276,6 +293,7 @@ void fill_jones(std::shared_ptr<library<std::complex<float>>> jones_lib, metadat
 void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
              std::shared_ptr<library<bool>> flag_mask,
              std::shared_ptr<library<std::complex<float>>> jones_lib,
+             std::shared_ptr<library<float>> weight_lib,
              metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
@@ -339,6 +357,11 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
     auto jones = jones_lib->operate();
     call_jones_kernel(PAR_CHAN, meta.nr_rows, meta.nr_polarizations, meta.nr_stations, (float*) vis.get(), (int*) correlations.data(), (float*) jones.get());
 
+    auto weight = weight_lib->operate();
+    for (int i = 0; i < meta.nr_polarizations * meta.nr_rows * PAR_CHAN; i++) {
+        vis[i] = vis[i] * weight[i];
+    }
+
     // Create plan
     std::clog << ">>> Creating plan" << std::endl;
     idg::Plan::Options options;
@@ -398,6 +421,7 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
       std::cout << "Testing image result. " << total_incorrect << " incorrect values." << std::endl;
     }
 
+    std::clog << ">>> Save Image" << std::endl;
     const long unsigned imshape[] = {4, grid_size, grid_size};
     npy::SaveArrayAsNumpy(
         "image.npy", false, 3, imshape,
@@ -444,18 +468,21 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<library<bool>> flag_mask = 
           std::make_shared<library<bool>>(shape, 1);
 
+  std::shared_ptr<library<float>> r_weight = 
+          std::make_shared<library<float>>(shape, CHAN_THR);
+
   std::vector<size_t> jshape {meta.nr_stations, PAR_CHAN, meta.nr_polarizations};
   std::shared_ptr<library<complex<float>>> jones_lib = 
           std::make_shared<library<complex<float>>>(shape, 1);
 
-  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, flag_mask,
+  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, flag_mask, r_weight,
           std::ref(frequencies), std::ref(correlations));
 
   std::thread jones(fill_jones, jones_lib, meta);
 
   std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
-      i = std::thread(grid_operate_thread, r3, flag_mask, jones_lib, meta, r_uvw, 
+      i = std::thread(grid_operate_thread, r3, flag_mask, jones_lib, r_weight, meta, r_uvw, 
                 std::ref(frequencies), std::ref(correlations));
   }
 
