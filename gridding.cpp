@@ -275,18 +275,37 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3,
 
 using namespace std::complex_literals;
 void fill_jones(std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
+  casacore::Table ms("/fastpool/data/test_bandpass.bcal");
+  casacore::ROArrayColumn<casacore::Complex> data_column(
+      ms, "CPARAM");
+  const casacore::Array<complex<float>> data_rows = data_column.getColumn();
+  std::clog << "data_rows " << data_rows.shape() << std::endl;
+  
   auto jones = jones_lib->fill();
-  // make into identity matrix
-  for (int a = 0; a < meta.nr_stations; a++) {
-    for (int c = 0; c < PAR_CHAN; c++) {
-      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
-      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
-      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
-      jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
+
+  std::clog << ">>> Guessing Jones Dimensions as " << meta.nr_stations << " stations and channels " << PAR_CHAN << std::endl;
+  for (unsigned int st = 0; st < meta.nr_stations; ++st) {
+    for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
+      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
+      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 0, chan, st));
+      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 0, chan, st));
+      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 0, chan, st));
     }
   }
 
-  // TODO: some jonesy thing
+  std::clog << ">>> Read table complete." << std::endl;
+
+  // auto jones = jones_lib->fill();
+  // // make into identity matrix
+  // for (unsigned int a = 0; a < meta.nr_stations; a++) {
+  //   for (unsigned int c = 0; c < PAR_CHAN; c++) {
+  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
+  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
+  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
+  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
+  //   }
+  // }
+
   jones_lib->queue(jones);
 }
 
@@ -358,7 +377,7 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
     call_jones_kernel(PAR_CHAN, meta.nr_rows, meta.nr_polarizations, meta.nr_stations, (float*) vis.get(), (int*) correlations.data(), (float*) jones.get());
 
     auto weight = weight_lib->operate();
-    for (int i = 0; i < meta.nr_polarizations * meta.nr_rows * PAR_CHAN; i++) {
+    for (unsigned int i = 0; i < meta.nr_polarizations * meta.nr_rows * PAR_CHAN; i++) {
         vis[i] = vis[i] * weight[i];
     }
 
