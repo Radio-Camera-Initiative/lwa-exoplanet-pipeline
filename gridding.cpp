@@ -33,7 +33,7 @@
 // [AT 8 IDG, ADDING PROXY IN START IS TOO MUCH MEMORY]
 
 const float SPEED_OF_LIGHT = 299792458.0;
-const float MAX_BL_M = 15392.2;
+const float MAX_BL_M = 2365.8; // max baseline for lwa
 
 bool global_reading = true;
 
@@ -54,7 +54,7 @@ struct metadata {
 metadata getMetadata(const string &ms_path) {
   casacore::MeasurementSet ms(ms_path);
   casacore::ROArrayColumn<casacore::Complex> data_column(
-      ms, casacore::MS::columnName(casacore::MSMainEnums::DATA)); // CORRECTED_DATA
+      ms, casacore::MS::columnName(casacore::MSMainEnums::CORRECTED_DATA)); // CORRECTED_DATA
   metadata meta{};
   meta.nr_polarizations = 4;
   meta.nr_rows = data_column.nrow();
@@ -154,7 +154,7 @@ void getData(const string &ms_path, metadata meta,
              idg::Array4D<complex<float>> &visibilities) {
   casacore::MeasurementSet ms(ms_path);
   casacore::ROArrayColumn<casacore::Complex> data_column(
-      ms, casacore::MS::columnName(casacore::MSMainEnums::DATA));
+      ms, casacore::MS::columnName(casacore::MSMainEnums::CORRECTED_DATA));
   casacore::ROArrayColumn<double> uvw_column(
       ms, casacore::MS::columnName(casacore::MSMainEnums::UVW));
   casacore::ROScalarColumn<int> ant1(

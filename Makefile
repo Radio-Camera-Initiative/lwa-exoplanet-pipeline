@@ -3,7 +3,7 @@ FLAGS = -std=c++2a -g
 
 LDFLAGS = -lrt -Wall -lpthread -lidg-cuda -L/opt/lib -lidg-util -lidg-common -lidg -lcasa_ms -lcasa_tables -lcasa_casa
 
-CUDA_PATH       ?= /usr/local/cuda-11.2
+CUDA_PATH       ?= /usr/local/cuda-11.8
 CUDA_INC_PATH   ?= $(CUDA_PATH)/include
 CUDA_BIN_PATH   ?= $(CUDA_PATH)/bin
 CUDA_LIB_PATH   ?= $(CUDA_PATH)/lib
@@ -44,7 +44,7 @@ else
 	NVCCFLAGS := -m64
 endif
 
-NVCCFLAGS += --compiler-bindir $(CC)
+NVCCFLAGS += -lineinfo --compiler-bindir $(CC)
 
 
 INCLUDE = -I. -I/opt/include -I$(CUDA_INC_PATH) -I$(LENDER_INC_PATH) -I$(CALIBRATION_INC_PATH)
