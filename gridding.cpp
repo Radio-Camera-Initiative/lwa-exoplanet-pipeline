@@ -273,39 +273,40 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, const int 
 }
 
 using namespace std::complex_literals;
-void fill_jones(std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
-  casacore::Table ms("/fastpool/data/test_bandpass.bcal");
-  casacore::ROArrayColumn<casacore::Complex> data_column(
-      ms, "CPARAM");
-  const casacore::Array<complex<float>> data_rows = data_column.getColumn();
-  std::clog << "data_rows " << data_rows.shape() << std::endl;
-  
-  auto jones = jones_lib->fill();
+void fill_jones(int argc, std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
+  for (int m = 1; m < argc; m++) {
+    casacore::Table ms("/fastpool/data/test_bandpass.bcal");
+    casacore::ROArrayColumn<casacore::Complex> data_column(
+        ms, "CPARAM");
+    const casacore::Array<complex<float>> data_rows = data_column.getColumn();
+    std::clog << "data_rows " << data_rows.shape() << std::endl;
+    
+    auto jones = jones_lib->fill();
 
-  std::clog << ">>> Guessing Jones Dimensions as " << meta.nr_stations << " stations and channels " << PAR_CHAN << std::endl;
-  for (unsigned int st = 0; st < meta.nr_stations; ++st) {
-    for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 0, chan, st));
+    std::clog << ">>> Guessing Jones Dimensions as " << meta.nr_stations << " stations and channels " << PAR_CHAN << std::endl;
+    for (unsigned int st = 0; st < meta.nr_stations; ++st) {
+      for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 0, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 0, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 0, chan, st));
+      }
     }
+
+    std::clog << ">>> Read table complete." << std::endl;
+
+    // bcal file is currently nonesense, so make into identity matrix
+    for (unsigned int a = 0; a < meta.nr_stations; a++) {
+      for (unsigned int c = 0; c < PAR_CHAN; c++) {
+        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
+        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
+        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
+        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
+      }
+    }
+
+    jones_lib->queue(jones);
   }
-
-  std::clog << ">>> Read table complete." << std::endl;
-
-  // auto jones = jones_lib->fill();
-  // // make into identity matrix
-  // for (unsigned int a = 0; a < meta.nr_stations; a++) {
-  //   for (unsigned int c = 0; c < PAR_CHAN; c++) {
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
-  //   }
-  // }
-
-  jones_lib->queue(jones);
 }
 
 void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<float>>> r3,
@@ -319,6 +320,11 @@ void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<fl
   
   // TODO: repeating the whole thing for now. In the future, want to only repeat necessary steps.
   for (int im = 1; im < argc; im++ ){
+    std::chrono::_V2::steady_clock::time_point sstart = 
+        std::chrono::steady_clock::now();
+    std::chrono::_V2::steady_clock::time_point sstop;
+    std::chrono::seconds sduration;
+
     std::clog << ">>> Initialize IDG proxy." << std::endl;
     idg::proxy::cuda::Generic proxy;
 
@@ -359,7 +365,6 @@ void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<fl
 
     // Do flagging
     auto flags = flag_mask->operate();
-    // memset(flags.get(), 0x00, sizeof(bool)*flags.size);
 
     // Application in GPU (just switching #s for nchan and nbaseline for now)
     std::clog << ">>> Running flagging" << std::endl;
@@ -400,6 +405,10 @@ void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<fl
     std::clog << "Run FFT" << std::endl;
     proxy.transform(idg::FourierDomainToImageDomain);
     auto image_corr = proxy.get_final_grid();
+    sstop = std::chrono::steady_clock::now();
+    sduration = std::chrono::duration_cast<std::chrono::seconds>(sstop - sstart);
+    std::clog << "Operation time (no saving): " << sduration.count() << "s"<< std::endl;
+
     auto image_iquv = proxy.allocate_array3d<double>(4, grid_size, grid_size);
     for (unsigned int i = 0; i < grid_size; ++i) {
       for (unsigned int j = 0; j < grid_size; ++j) {
@@ -424,11 +433,19 @@ void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<fl
         std::to_string(im) + "_image.npy", false, 3, imshape,
         std::vector<double>(image_iquv.data(),
                             image_iquv.data() + image_iquv.size()));
+
+    sstop = std::chrono::steady_clock::now();
+    sduration = std::chrono::duration_cast<std::chrono::seconds>(sstop - sstart);
+    std::clog << "Operation time (with saving): " << sduration.count() << "s"<< std::endl;
   }
 }
 
 
 int main(int argc, char *argv[]) {
+  std::chrono::_V2::steady_clock::time_point start = 
+      std::chrono::steady_clock::now();
+  std::chrono::_V2::steady_clock::time_point stop;
+  std::chrono::seconds duration;
 
   if (argc < 2) {
     std::cout << "Expected file input" << std::endl;
@@ -483,12 +500,12 @@ int main(int argc, char *argv[]) {
 
   std::vector<size_t> jshape {meta.nr_stations, PAR_CHAN, meta.nr_polarizations};
   std::shared_ptr<library<complex<float>>> jones_lib = 
-          std::make_shared<library<complex<float>>>(shape, 1);
+          std::make_shared<library<complex<float>>>(shape, argc);
 
   std::thread measurement (ms_fill_thread, r3, argc, argv, meta, r_uvw, flag_mask, r_weight,
           std::ref(frequencies), std::ref(correlations));
 
-  std::thread jones(fill_jones, jones_lib, meta);
+  std::thread jones(fill_jones, argc, jones_lib, meta);
 
   std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
@@ -501,4 +518,8 @@ int main(int argc, char *argv[]) {
   for (auto& i : threads) {
       i.join();
   }
+
+    stop = std::chrono::steady_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
+    std::clog << "Total time: " << duration.count() << "s"<< std::endl;
 }
