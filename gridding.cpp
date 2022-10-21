@@ -273,7 +273,7 @@ void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, const int 
 }
 
 using namespace std::complex_literals;
-void fill_jones(int argc, std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
+void fill_jones(int argc, std::shared_ptr<mailbox<std::complex<float>>> jones_lib, metadata meta) {
   for (int m = 1; m < argc; m++) {
     casacore::Table ms("/fastpool/data/test_bandpass.bcal");
     casacore::ROArrayColumn<casacore::Complex> data_column(
@@ -305,13 +305,13 @@ void fill_jones(int argc, std::shared_ptr<library<std::complex<float>>> jones_li
       }
     }
 
-    jones_lib->queue(jones);
+    jones_lib->queue(m, jones);
   }
 }
 
 void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<float>>> r3,
              std::shared_ptr<library<bool>> flag_mask,
-             std::shared_ptr<library<std::complex<float>>> jones_lib,
+             std::shared_ptr<mailbox<std::complex<float>>> jones_lib,
              std::shared_ptr<library<float>> weight_lib,
              metadata meta,
              std::shared_ptr<library<float>> r_uvw,
@@ -370,7 +370,7 @@ void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<fl
     std::clog << ">>> Running flagging" << std::endl;
     call_flag_mask_kernel(meta.nr_rows, PAR_CHAN, meta.nr_polarizations, flags.get(), (float*) vis.get());
 
-    auto jones = jones_lib->operate();
+    auto jones = jones_lib->operate(im);
     call_jones_kernel(PAR_CHAN, meta.nr_rows, meta.nr_polarizations, meta.nr_stations, (float*) vis.get(), (int*) correlations.data(), (float*) jones.get());
 
     auto weight = weight_lib->operate();
@@ -499,8 +499,8 @@ int main(int argc, char *argv[]) {
           std::make_shared<library<float>>(shape, argc);
 
   std::vector<size_t> jshape {meta.nr_stations, PAR_CHAN, meta.nr_polarizations};
-  std::shared_ptr<library<complex<float>>> jones_lib = 
-          std::make_shared<library<complex<float>>>(shape, argc);
+  std::shared_ptr<mailbox<complex<float>>> jones_lib = 
+          std::make_shared<mailbox<complex<float>>>(shape, argc);
 
   std::thread measurement (ms_fill_thread, r3, argc, argv, meta, r_uvw, flag_mask, r_weight,
           std::ref(frequencies), std::ref(correlations));
