@@ -7,8 +7,8 @@ CUDA_PATH       ?= /usr/local/cuda-11.8
 CUDA_INC_PATH   ?= $(CUDA_PATH)/include
 CUDA_BIN_PATH   ?= $(CUDA_PATH)/bin
 CUDA_LIB_PATH   ?= $(CUDA_PATH)/lib
-LENDER_INC_PATH     ?= ../rci-memory-lender
-CALIBRATION_INC_PATH    ?= ../calibration-application
+LENDER_INC_PATH     ?= /fastpool/mlaures/rci-memory-lender
+CALIBRATION_INC_PATH    ?= /fastpool/mlaures/calibration-application
 
 # CUDA code generation flags
 GENCODE_FLAGS   := -gencode arch=compute_35,code=sm_35 \
