@@ -1,6 +1,12 @@
 import numpy as np
+import sys
 
-a = np.load('image.npy')
+if len(sys.argv) > 1:
+    name = sys.argv[1]
+else:
+    name = '1_image.npy'
+
+a = np.load(name)
 print(a[0].max())
 #assert(a[0].max() == 0.0166628360748291)
 

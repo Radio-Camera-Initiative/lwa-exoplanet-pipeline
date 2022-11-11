@@ -35,8 +35,6 @@
 const float SPEED_OF_LIGHT = 299792458.0;
 const float MAX_BL_M = 2365.8; // max baseline for lwa
 
-bool global_reading = true;
-
 using casacore::IPosition;
 using std::complex;
 using std::string;
@@ -227,153 +225,142 @@ float computeImageSize(unsigned long grid_size, float end_frequency) {
 }
 
 
-void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, 
-             const string& ms_path, metadata meta,
+void ms_fill_thread(std::shared_ptr<library<std::complex<float>>> r3, const int argc,
+             char *argv[], metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              std::shared_ptr<library<bool>> r_flag,
              std::shared_ptr<library<float>> r_weight,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) {
-
-  idg::Array4D<complex<float>> main_vis = idg::Array4D<complex<float>>(meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
   
-  auto uvw_b = r_uvw->fill();
-  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
-
-  auto flag_b = r_flag->fill();
-  idg::Array4D<bool> flags((bool*) flag_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
-
-  auto weight_b = r_weight->fill();
-  idg::Array4D<float> weights(weight_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
-
-  std::clog << ">>> Reading data" << std::endl;
-  getData(ms_path, meta, uvw, flags, weights, frequencies, correlations, main_vis);
-
-  r_uvw->queue(uvw_b);
-  r_flag->queue(flag_b);
-  r_weight->queue(weight_b);
-
-  // start timing, calculate how much
+  
   std::chrono::_V2::steady_clock::time_point start;
   std::chrono::_V2::steady_clock::time_point stop;
   std::chrono::milliseconds duration;
-  // while(global_reading) {
+  
+  // start loop through each arg
+  string ms_path;
+  for (int m = 1; m < argc; m++) {
+    ms_path = argv[m];
+
+    std::clog << ">>> Reading data" << std::endl;
+    // start timing, calculate how much
     start = std::chrono::steady_clock::now();
-    std::clog << ">>> Copying main data" << std::endl;
+    
     auto vis = r3->fill();
     idg::Array4D<complex<float>> visibilities(vis.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
-    memcpy(visibilities.data(), main_vis.data(), main_vis.bytes());
+      
+    auto uvw_b = r_uvw->fill();
+    idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
+
+    auto flag_b = r_flag->fill();
+    idg::Array4D<bool> flags((bool*) flag_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
+
+    auto weight_b = r_weight->fill();
+    idg::Array4D<float> weights(weight_b.get(), meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations);
+
+    getData(ms_path, meta, uvw, flags, weights, frequencies, correlations, visibilities);
+
+    r_uvw->queue(uvw_b);
+    r_flag->queue(flag_b);
+    r_weight->queue(weight_b);
     r3->queue(vis);
+
     stop = std::chrono::steady_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
-    std::clog << "Sent " << main_vis.bytes() << " in " << duration.count() << " milliseconds. " <<
-      ((float)main_vis.bytes()/1e9)/((float)duration.count()/1000.0f) << " GB/s"<< std::endl;
-  // }
-
-  // global_reading = false;
+    std::clog << "Total data read for " << ms_path << " in " << duration.count() << " milliseconds. " <<std::endl;
+  }
 }
 
 using namespace std::complex_literals;
-void fill_jones(std::shared_ptr<library<std::complex<float>>> jones_lib, metadata meta) {
-  casacore::Table ms("/fastpool/data/test_bandpass.bcal");
-  casacore::ROArrayColumn<casacore::Complex> data_column(
-      ms, "CPARAM");
-  const casacore::Array<complex<float>> data_rows = data_column.getColumn();
-  std::clog << "data_rows " << data_rows.shape() << std::endl;
-  
-  auto jones = jones_lib->fill();
+void fill_jones(int argc, std::shared_ptr<mailbox<std::complex<float>>> jones_lib, metadata meta) {
+  for (int m = 1; m < argc; m++) {
+    casacore::Table ms("/fastpool/data/test_bandpass.bcal");
+    casacore::ROArrayColumn<casacore::Complex> data_column(
+        ms, "CPARAM");
+    const casacore::Array<complex<float>> data_rows = data_column.getColumn();
+    std::clog << "data_rows " << data_rows.shape() << std::endl;
+    
+    auto jones = jones_lib->fill();
 
-  std::clog << ">>> Guessing Jones Dimensions as " << meta.nr_stations << " stations and channels " << PAR_CHAN << std::endl;
-  for (unsigned int st = 0; st < meta.nr_stations; ++st) {
-    for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 0, chan, st));
-      jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 0, chan, st));
+    std::clog << ">>> Guessing Jones Dimensions as " << meta.nr_stations << " stations and channels " << PAR_CHAN << std::endl;
+    for (unsigned int st = 0; st < meta.nr_stations; ++st) {
+      for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 1, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 2, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 3, chan, st));
+      }
     }
+
+    std::clog << ">>> Read table complete." << std::endl;
+
+    jones_lib->queue(m, jones);
   }
-
-  std::clog << ">>> Read table complete." << std::endl;
-
-  // auto jones = jones_lib->fill();
-  // // make into identity matrix
-  // for (unsigned int a = 0; a < meta.nr_stations; a++) {
-  //   for (unsigned int c = 0; c < PAR_CHAN; c++) {
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
-  //     jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
-  //   }
-  // }
-
-  jones_lib->queue(jones);
 }
 
-void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
+void grid_operate_thread(const int argc, std::shared_ptr<library<std::complex<float>>> r3,
              std::shared_ptr<library<bool>> flag_mask,
-             std::shared_ptr<library<std::complex<float>>> jones_lib,
+             std::shared_ptr<mailbox<std::complex<float>>> jones_lib,
              std::shared_ptr<library<float>> weight_lib,
              metadata meta,
              std::shared_ptr<library<float>> r_uvw,
              idg::Array1D<float> &frequencies,
              idg::Array1D<std::pair<unsigned int, unsigned int>> &correlations) { // proxy
   
-  std::clog << ">>> Initialize IDG proxy." << std::endl;
-  idg::proxy::cuda::Generic proxy;
+  // TODO: repeating the whole thing for now. In the future, want to only repeat necessary steps.
+  for (int im = 1; im < argc; im++ ){
+    std::chrono::_V2::steady_clock::time_point sstart = 
+        std::chrono::steady_clock::now();
+    std::chrono::_V2::steady_clock::time_point sstop;
+    std::chrono::seconds sduration;
 
-  float end_frequency = frequencies(frequencies.size() - 1);
-  std::clog << "end frequency = " << end_frequency << std::endl;
+    std::clog << ">>> Initialize IDG proxy." << std::endl;
+    idg::proxy::cuda::Generic proxy;
 
-  unsigned int grid_size = 8192;
-  float image_size = computeImageSize(grid_size, end_frequency);
-  float cell_size = image_size / grid_size;
-  std::clog << "grid_size = " << grid_size << std::endl;
-  std::clog << "image_size = " << image_size << " (radians?)" << std::endl;
-  std::clog << "pixel_size (idg's cell_size) = " << cell_size << " (radians?)" << std::endl;
+    float end_frequency = frequencies(frequencies.size() - 1);
+    std::clog << "end frequency = " << end_frequency << std::endl;
 
-  // A-terms
-  const unsigned int nr_timeslots = 1;  // timeslot for a-term
-  const unsigned int subgrid_size = 32;
-  const unsigned int kernel_size = 13;
-  idg::Array4D<idg::Matrix2x2<complex<float>>> aterms = idg::get_example_aterms(
-      proxy, nr_timeslots, meta.nr_stations, subgrid_size, subgrid_size);
-  idg::Array1D<unsigned int> aterms_offsets =
-      idg::get_example_aterms_offsets(proxy, nr_timeslots, meta.nr_timesteps);
+    unsigned int grid_size = 8192;
+    float image_size = computeImageSize(grid_size, end_frequency);
+    float cell_size = image_size / grid_size;
+    std::clog << "grid_size = " << grid_size << std::endl;
+    std::clog << "image_size = " << image_size << " (radians?)" << std::endl;
+    std::clog << "pixel_size (idg's cell_size) = " << cell_size << " (radians?)" << std::endl;
 
-  idg::Array2D<float> spread =
-      idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
-  idg::Array1D<float> shift = idg::get_zero_shift();
+    // A-terms
+    const unsigned int nr_timeslots = 1;  // timeslot for a-term
+    const unsigned int subgrid_size = 32;
+    const unsigned int kernel_size = 13;
+    idg::Array4D<idg::Matrix2x2<complex<float>>> aterms = idg::get_example_aterms(
+        proxy, nr_timeslots, meta.nr_stations, subgrid_size, subgrid_size);
+    idg::Array1D<unsigned int> aterms_offsets =
+        idg::get_example_aterms_offsets(proxy, nr_timeslots, meta.nr_timesteps);
 
-  std::shared_ptr<idg::Grid> grid =
-      proxy.allocate_grid(1, meta.nr_polarizations, grid_size, grid_size);
-  proxy.set_grid(grid);
-  // no w-tiling, i.e. not using w_step
+    idg::Array2D<float> spread =
+        idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
+    idg::Array1D<float> shift = idg::get_zero_shift();
 
-  proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
+    std::shared_ptr<idg::Grid> grid =
+        proxy.allocate_grid(1, meta.nr_polarizations, grid_size, grid_size);
+    proxy.set_grid(grid);
+    // no w-tiling, i.e. not using w_step
 
-  auto uvw_b = r_uvw->operate();
-  idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
+    proxy.init_cache(subgrid_size, cell_size, 0.0, shift);
 
-  // Create reference array (vector)
-  std::vector<long unsigned> im_shape {4, grid_size, grid_size};
-  auto ref_iquv = proxy.allocate_array3d<double>(4, grid_size, grid_size);
-  std::vector<double> temp_data = std::vector<double>(ref_iquv.data(),
-                            ref_iquv.data() + ref_iquv.size());
-  bool t = false;
-  npy::LoadArrayFromNumpy("reference.npy", im_shape, t, temp_data);
+    auto uvw_b = r_uvw->operate();
+    idg::Array2D<idg::UVW<float>> uvw((idg::UVW<float>*) uvw_b.get(), meta.nr_rows, meta.nr_timesteps);
 
-  // while (global_reading) {
     buffer_ptr vis = r3->operate();
 
     // Do flagging
     auto flags = flag_mask->operate();
-    // memset(flags.get(), 0x00, sizeof(bool)*flags.size);
 
     // Application in GPU (just switching #s for nchan and nbaseline for now)
     std::clog << ">>> Running flagging" << std::endl;
     call_flag_mask_kernel(meta.nr_rows, PAR_CHAN, meta.nr_polarizations, flags.get(), (float*) vis.get());
 
-    auto jones = jones_lib->operate();
+    auto jones = jones_lib->operate(im);
     call_jones_kernel(PAR_CHAN, meta.nr_rows, meta.nr_polarizations, meta.nr_stations, (float*) vis.get(), (int*) correlations.data(), (float*) jones.get());
 
     auto weight = weight_lib->operate();
@@ -408,6 +395,10 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
     std::clog << "Run FFT" << std::endl;
     proxy.transform(idg::FourierDomainToImageDomain);
     auto image_corr = proxy.get_final_grid();
+    sstop = std::chrono::steady_clock::now();
+    sduration = std::chrono::duration_cast<std::chrono::seconds>(sstop - sstart);
+    std::clog << "Operation time (no saving): " << sduration.count() << "s"<< std::endl;
+
     auto image_iquv = proxy.allocate_array3d<double>(4, grid_size, grid_size);
     for (unsigned int i = 0; i < grid_size; ++i) {
       for (unsigned int j = 0; j < grid_size; ++j) {
@@ -426,35 +417,42 @@ void grid_operate_thread(std::shared_ptr<library<std::complex<float>>> r3,
       }
     }
 
-    if (TEST) {
-      int total_incorrect = 0;
-      for (size_t z = 0; z < ref_iquv.get_z_dim(); ++z) {
-        for (size_t y = 0; y < ref_iquv.get_y_dim(); ++y) {
-          for (size_t x = 0; x < ref_iquv.get_x_dim(); ++x) {
-            if (std::fabs(ref_iquv(z, y, x) - image_iquv(z, y, x)) > 0.01) {
-              ++total_incorrect;
-            }
-          }
-        }
-      }
-      std::cout << "Testing image result. " << total_incorrect << " incorrect values." << std::endl;
-    }
-
     std::clog << ">>> Save Image" << std::endl;
     const long unsigned imshape[] = {4, grid_size, grid_size};
     npy::SaveArrayAsNumpy(
-        "image.npy", false, 3, imshape,
+        std::to_string(im) + "_image.npy", false, 3, imshape,
         std::vector<double>(image_iquv.data(),
                             image_iquv.data() + image_iquv.size()));
-  // }
+
+    sstop = std::chrono::steady_clock::now();
+    sduration = std::chrono::duration_cast<std::chrono::seconds>(sstop - sstart);
+    std::clog << "Operation time (with saving): " << sduration.count() << "s"<< std::endl;
+  }
 }
 
 
 int main(int argc, char *argv[]) {
-  string ms_path = "/fastpool/data/LWA_calibrated.ms";
-  // string ms_path = "/fastpool/data/20210226M-1350MHz-1chan-1int-ground-truth.ms";
+  std::chrono::_V2::steady_clock::time_point start = 
+      std::chrono::steady_clock::now();
+  std::chrono::_V2::steady_clock::time_point stop;
+  std::chrono::seconds duration;
 
-  metadata meta = getMetadata(ms_path);
+  if (argc < 2) {
+    std::cout << "Expected file input" << std::endl;
+    return 1;
+  } else {
+    for (int i = 0; i < argc; i++) {
+      std::cout << argv[i] << std::endl;
+    }
+    std::cout << "argc " << argc << std::endl;
+    string s = argv[1];
+    if (s.find('*') < s.length()) {
+      std::cout << "No matching files" << std::endl;
+      return 1;
+    }
+  }
+
+  metadata meta = getMetadata(argv[1]);
 
   std::cout
         << "offset of u = " << offsetof(idg::UVW<float>, u) << '\n'
@@ -476,32 +474,32 @@ int main(int argc, char *argv[]) {
 
   std::vector<size_t> shape_uvw {meta.nr_rows, meta.nr_timesteps, 3};
   std::shared_ptr<library<float>> r_uvw = 
-          std::make_shared<library<float>>(shape_uvw, 1);
+          std::make_shared<library<float>>(shape_uvw, argc);
 
   std::clog << ">>> Allocating vis" << std::endl;
 
   std::vector<size_t> shape {meta.nr_rows, meta.nr_timesteps, PAR_CHAN, meta.nr_polarizations};
   std::shared_ptr<library<complex<float>>> r3 = 
-          std::make_shared<library<complex<float>>>(shape, CHAN_THR);
+          std::make_shared<library<complex<float>>>(shape, argc);
 
   std::shared_ptr<library<bool>> flag_mask = 
-          std::make_shared<library<bool>>(shape, 1);
+          std::make_shared<library<bool>>(shape, argc);
 
   std::shared_ptr<library<float>> r_weight = 
-          std::make_shared<library<float>>(shape, CHAN_THR);
+          std::make_shared<library<float>>(shape, argc);
 
   std::vector<size_t> jshape {meta.nr_stations, PAR_CHAN, meta.nr_polarizations};
-  std::shared_ptr<library<complex<float>>> jones_lib = 
-          std::make_shared<library<complex<float>>>(shape, 1);
+  std::shared_ptr<mailbox<complex<float>>> jones_lib = 
+          std::make_shared<mailbox<complex<float>>>(shape, argc);
 
-  std::thread measurement (ms_fill_thread, r3, ms_path, meta, r_uvw, flag_mask, r_weight,
+  std::thread measurement (ms_fill_thread, r3, argc, argv, meta, r_uvw, flag_mask, r_weight,
           std::ref(frequencies), std::ref(correlations));
 
-  std::thread jones(fill_jones, jones_lib, meta);
+  std::thread jones(fill_jones, argc, jones_lib, meta);
 
   std::vector<std::thread> threads(CHAN_THR);
   for (auto& i : threads) {
-      i = std::thread(grid_operate_thread, r3, flag_mask, jones_lib, r_weight, meta, r_uvw, 
+      i = std::thread(grid_operate_thread, argc, r3, flag_mask, jones_lib, r_weight, meta, r_uvw, 
                 std::ref(frequencies), std::ref(correlations));
   }
 
@@ -510,4 +508,8 @@ int main(int argc, char *argv[]) {
   for (auto& i : threads) {
       i.join();
   }
+
+    stop = std::chrono::steady_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::seconds>(stop - start);
+    std::clog << "Total time: " << duration.count() << "s"<< std::endl;
 }

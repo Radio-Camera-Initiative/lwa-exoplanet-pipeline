@@ -58,7 +58,7 @@ all: gridding apply.o
 gridding: $(SOURCES)
 	$(CC) $(FLAGS) $(SOURCES) -o $(TARGETS) -O3 $(LDFLAGS) $(INCLUDE)
 
-apply.o: /fastpool/mlaures/calibration-application/calibration.cu
+apply.o: ../calibration-application/calibration.cu
 	$(NVCC) $(NVCCFLAGS) -O3 $(EXTRA_NVCCFLAGS) $(GENCODE_FLAGS) -I$(CUDA_INC_PATH) -o $@ -c $<
 
 # $(TARGETS): r3.o main.o
