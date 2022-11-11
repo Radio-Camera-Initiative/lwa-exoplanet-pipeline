@@ -6,9 +6,17 @@
 >- cuda-11.8 (in /usr/local)
 >- libraries that may need to be downloaded will depend on LDFLAGS in Makefile
 
+## Installation
+
+The LWA exoplanet pipeline depends on CUDA. Make sure your machine is cuda enabled and has those libraries.
+
+The pipeline also uses IDG, which needs to be downloaded and installed separately from the [IDG repo](https://gitlab.com/astron-idg/idg).
+
 ## Include files
 
-The lwa pipeline is dependent on a couple of included files containing the RCI-Memory-Lender and GPU kernels written for the pipeline. The *hard-coded* include paths are in the Makefile as `CALIBRATION_INC_PATH` and `LENDER_INC_PATH`. If you are on wario, these files are in `/fastpool/mlaures/` and their respective repos. You do not need to change the paths in this case.
+The lwa pipeline is dependent on a couple of included files containing the RCI-Memory-Lender and GPU kernels written for the pipeline. The *hard-coded, relative* include paths are in the Makefile as `CALIBRATION_INC_PATH` and `LENDER_INC_PATH`. 
+
+It is assumed that the three repos, [rci-memory-lender](https://github.com/Radio-Camera-Initiative/rci-memory-lender), [lwa-exoplanet-pipeline](https://github.com/Radio-Camera-Initiative/lwa-exoplanet-pipeline) and [calibration-application](https://github.com/Radio-Camera-Initiative/calibration-application) are within the same directory. If you are on wario, these files are in `/fastpool/mlaures/` and their respective repos.
 
 ## Running the pipeline
 

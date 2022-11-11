@@ -287,23 +287,13 @@ void fill_jones(int argc, std::shared_ptr<mailbox<std::complex<float>>> jones_li
     for (unsigned int st = 0; st < meta.nr_stations; ++st) {
       for (unsigned int chan = 0; chan < PAR_CHAN; ++chan) {
         jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations)] = data_rows(IPosition(3, 0, chan, st));
-        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 0, chan, st));
-        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 0, chan, st));
-        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 0, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 1] = data_rows(IPosition(3, 1, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 2] = data_rows(IPosition(3, 2, chan, st));
+        jones[(st * PAR_CHAN * meta.nr_polarizations) + (chan * meta.nr_polarizations) + 3] = data_rows(IPosition(3, 3, chan, st));
       }
     }
 
     std::clog << ">>> Read table complete." << std::endl;
-
-    // bcal file is currently nonesense, so make into identity matrix
-    for (unsigned int a = 0; a < meta.nr_stations; a++) {
-      for (unsigned int c = 0; c < PAR_CHAN; c++) {
-        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations)] = 1. + 0i;
-        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 1] = 0. + 0i;
-        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 2] = 0. + 0i;
-        jones[(a * PAR_CHAN * meta.nr_polarizations) + (c * meta.nr_polarizations) + 3] = 1. +0i;
-      }
-    }
 
     jones_lib->queue(m, jones);
   }
